@@ -17,9 +17,16 @@
 
 package org.apache.doris.nereids.trees.expressions.visitor;
 
+import org.apache.doris.nereids.trees.expressions.ComparisonPredicate;
+import org.apache.doris.nereids.trees.expressions.EqualTo;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.WindowExpression;
 import org.apache.doris.nereids.trees.expressions.functions.agg.AggregateFunction;
+import org.apache.doris.nereids.trees.metadata.Predicates;
+import org.apache.doris.nereids.util.ExpressionUtils;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * This is the factory for all ExpressionVisitor instance.
@@ -52,6 +59,39 @@ public class ExpressionVisitors {
         @Override
         public Boolean visitAggregateFunction(AggregateFunction aggregateFunction, Void context) {
             return true;
+        }
+    }
+
+    /**
+     * Split the expression to
+     * Should new instance when used.
+     */
+    public static class PredicatesSpliter extends DefaultExpressionVisitor<Void, Void> {
+
+        private List<Expression> equalPredicates = new ArrayList<>();
+        private List<Expression> rangePredicates = new ArrayList<>();
+        private List<Expression> residualPredicates = new ArrayList<>();
+
+        @Override
+        public Void visitComparisonPredicate(ComparisonPredicate comparisonPredicate, Void context) {
+            // TODO Smallest implement, complete later
+            if (comparisonPredicate instanceof EqualTo) {
+                Expression argument0 = comparisonPredicate.getArgument(0);
+                Expression argument1 = comparisonPredicate.getArgument(1);
+                if (argument0.isSlot() && argument1.isSlot()) {
+                    equalPredicates.add(comparisonPredicate);
+                } else {
+                    rangePredicates.add(comparisonPredicate);
+                }
+            }
+            return super.visit(comparisonPredicate, context);
+        }
+
+        public Predicates.SplitPredicate getSplitPredicate() {
+            return Predicates.SplitPredicate.of(
+                    equalPredicates.isEmpty() ? null : ExpressionUtils.and(equalPredicates),
+                    rangePredicates.isEmpty() ? null : ExpressionUtils.and(rangePredicates),
+                    residualPredicates.isEmpty() ? null : ExpressionUtils.and(residualPredicates));
         }
     }
 }

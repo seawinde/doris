@@ -50,6 +50,7 @@ import org.apache.doris.nereids.rules.RuleSet;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.rules.analysis.BindRelation.CustomTableResolver;
 import org.apache.doris.nereids.rules.rewrite.OneRewriteRuleFactory;
+import org.apache.doris.nereids.rules.rewrite.mv.MaterializationContext;
 import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.plans.GroupPlan;
 import org.apache.doris.nereids.trees.plans.Plan;
@@ -73,6 +74,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -167,7 +169,7 @@ public class PlanChecker {
 
     public PlanChecker applyTopDown(List<Rule> rule) {
         Rewriter.getWholeTreeRewriterWithCustomJobs(cascadesContext,
-                ImmutableList.of(new RootPlanTreeRewriteJob(rule, PlanTreeRewriteTopDownJob::new, true)))
+                        ImmutableList.of(new RootPlanTreeRewriteJob(rule, PlanTreeRewriteTopDownJob::new, true)))
                 .execute();
         cascadesContext.toMemo();
         MemoValidator.validate(cascadesContext.getMemo());
@@ -577,6 +579,47 @@ public class PlanChecker {
     public PlanChecker checkPlannerResult(String sql) {
         return checkPlannerResult(sql, planner -> {
         });
+    }
+
+    public PlanChecker checkMVRewrite(String sql, String mvSql, String mvScanSql,
+            BiConsumer<NereidsPlanner, NereidsPlanner> consumer) {
+
+        PhysicalProperties physicalProperties = NereidsPlanner.buildInitRequireProperties();
+        // Mock materialized view define sql
+        LogicalPlan mvUnboundPlan = new NereidsParser().parseSingle(mvSql);
+        NereidsPlanner mvPlanner = new NereidsPlanner(
+                new StatementContext(connectContext, new OriginStatement(mvSql, 0)));
+        mvPlanner.plan(mvUnboundPlan, physicalProperties, ExplainLevel.ALL_PLAN);
+
+        // mock the mv scan, this should be from materializedView
+        LogicalPlan mvScanUnboundPlan = new NereidsParser().parseSingle(mvScanSql);
+        NereidsPlanner mvScanPlanner = new NereidsPlanner(
+                new StatementContext(connectContext, new OriginStatement(mvScanSql, 0)));
+        mvScanPlanner.plan(mvScanUnboundPlan, physicalProperties, ExplainLevel.ALL_PLAN);
+
+        // mock the mv context and query rewrite, should call actual materialized view instead
+        LogicalPlan queryUnboundPlan = new NereidsParser().parseSingle(sql);
+        StatementContext queryStmtContext = new StatementContext(connectContext, new OriginStatement(sql, 0));
+        NereidsPlanner queryPlanner = new NereidsPlanner(queryStmtContext);
+        CascadesContext queryCascadesContext =
+                CascadesContext.initContext(queryStmtContext, queryUnboundPlan, physicalProperties);
+        if (queryStmtContext.getConnectContext().getTables() != null) {
+            queryCascadesContext.setTables(queryStmtContext.getConnectContext().getTables());
+        }
+
+        MaterializationContext mvContext = new MaterializationContext(
+                mvPlanner.getRewrittenPlan(),
+                queryCascadesContext,
+                ImmutableList.of(),
+                ImmutableList.of(),
+                mvScanPlanner.getRewrittenPlan()
+        );
+        queryCascadesContext.addMaterializationContext(mvContext);
+        queryPlanner.setCascadesContext(queryCascadesContext);
+
+        queryPlanner.plan(LogicalPlanAdapter.of(queryUnboundPlan));
+        consumer.accept(queryPlanner, mvPlanner);
+        return this;
     }
 
     public CascadesContext getCascadesContext() {

@@ -257,9 +257,12 @@ public class NereidsPlanner extends Planner {
     }
 
     private void initCascadesContext(LogicalPlan plan, PhysicalProperties requireProperties) {
-        cascadesContext = CascadesContext.initContext(statementContext, plan, requireProperties);
-        if (statementContext.getConnectContext().getTables() != null) {
-            cascadesContext.setTables(statementContext.getConnectContext().getTables());
+        // should call statementContext.getConnectContext().getEnv().getMgr
+        if (cascadesContext == null) {
+            cascadesContext = CascadesContext.initContext(statementContext, plan, requireProperties);
+            if (statementContext.getConnectContext().getTables() != null) {
+                cascadesContext.setTables(statementContext.getConnectContext().getTables());
+            }
         }
     }
 
@@ -475,6 +478,11 @@ public class NereidsPlanner extends Planner {
     @VisibleForTesting
     public CascadesContext getCascadesContext() {
         return cascadesContext;
+    }
+
+    @VisibleForTesting
+    public void setCascadesContext(CascadesContext cascadesContext) {
+        this.cascadesContext = cascadesContext;
     }
 
     public static PhysicalProperties buildInitRequireProperties() {

@@ -314,12 +314,29 @@ public class Memo {
         plan = replaceChildrenToGroupPlan(plan, childrenGroups);
         GroupExpression newGroupExpression = new GroupExpression(plan, childrenGroups);
         Group group = new Group(groupIdGenerator.getNextId(), newGroupExpression, plan.getLogicalProperties());
+        // PoC add struct info to group
 
         groups.put(group.getGroupId(), group);
         if (groupExpressions.containsKey(newGroupExpression)) {
             throw new IllegalStateException("groupExpression already exists in memo, maybe a bug");
         }
         groupExpressions.put(newGroupExpression, newGroupExpression);
+        return group;
+    }
+
+    /** initPoC */
+    public Group initPoC(Plan plan) {
+        Preconditions.checkArgument(!(plan instanceof GroupPlan), "Cannot init memo by a GroupPlan");
+
+        /* initialize children recursively */
+        List<Group> childrenGroups = new ArrayList<>(plan.arity());
+        for (Plan child : plan.children()) {
+            childrenGroups.add(initPoC(child));
+        }
+
+        plan = replaceChildrenToGroupPlan(plan, childrenGroups);
+        GroupExpression newGroupExpression = new GroupExpression(plan, childrenGroups);
+        Group group = new Group(groupIdGenerator.getNextId(), newGroupExpression, plan.getLogicalProperties());
         return group;
     }
 

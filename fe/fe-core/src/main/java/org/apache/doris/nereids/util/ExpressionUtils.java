@@ -42,12 +42,14 @@ import org.apache.doris.nereids.trees.expressions.visitor.DefaultExpressionRewri
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
+import com.google.common.collect.BiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
@@ -194,6 +196,64 @@ public class ExpressionUtils {
         return distinctExpressions.stream()
                 .reduce(type == And.class ? And::new : Or::new)
                 .orElse(BooleanLiteral.of(type == And.class));
+    }
+
+    /**
+     * Returns a condition decomposed by AND.
+     */
+    public static List<Expression> decomposeAnd(Expression expression) {
+        List<Expression> conjuncts = new ArrayList<>();
+        if (expression == null) {
+            return conjuncts;
+        }
+        extractExpressionBy(expression, conjuncts, And.class);
+        return conjuncts;
+    }
+
+    private static void extractExpressionBy(Expression target,
+            List<Expression> expressions,
+            Class<? extends CompoundPredicate> clazz) {
+        if (!(target instanceof CompoundPredicate)) {
+            expressions.add(target);
+            return;
+        }
+        CompoundPredicate compoundPredicate = (CompoundPredicate) target;
+        if (!compoundPredicate.getClass().isAssignableFrom(clazz)) {
+            expressions.add(compoundPredicate);
+            return;
+        }
+        extractExpressionBy(compoundPredicate.getArgument(0), expressions, clazz);
+        extractExpressionBy(compoundPredicate.getArgument(1), expressions, clazz);
+    }
+
+    /**
+     * Returns a condition decomposed by OR.
+     */
+    public static List<Expression> decomposeOr(Expression expression) {
+        List<Expression> disConjunct = new ArrayList<>();
+        if (expression == null) {
+            return disConjunct;
+        }
+        extractExpressionBy(expression, disConjunct, Or.class);
+        return disConjunct;
+    }
+
+    /**
+     * Given an expression, it will swap the table relation contained in its
+     * using the contents in the map.
+     */
+    public static Expression swapTableRelation(Expression expression,
+            BiMap<Long, Long> tableRelationMapping) {
+        return null;
+    }
+
+    /**
+     * Given an expression, it will permute the column contained in its
+     * using the contents in the map.
+     */
+    public static Expression permuteColumn(Expression expression,
+            BiMap<SlotReference, SlotReference> columnMapping) {
+        return null;
     }
 
     /**

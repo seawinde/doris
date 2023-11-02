@@ -28,6 +28,11 @@ import java.util.Set;
 
 /**
  * HyperGraph Node.
+ * Jc
+ * \
+ * F
+ * \
+ * JC
  */
 public class Node {
     private final int index;

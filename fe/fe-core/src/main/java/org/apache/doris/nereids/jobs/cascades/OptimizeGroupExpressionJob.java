@@ -23,7 +23,7 @@ import org.apache.doris.nereids.jobs.JobType;
 import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.rules.Rule;
 
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -69,20 +69,24 @@ public class OptimizeGroupExpressionJob extends Job {
                 .isEnableBushyTree();
         int joinNumBushyTree = context.getCascadesContext().getConnectContext()
                 .getSessionVariable().getMaxJoinNumBushyTree();
+
+        List<Rule> exploreRules = new ArrayList<>(getRuleSet().getMaterializedViewRules());
+
         if (isDisableJoinReorder) {
-            return Collections.emptyList();
+            //todo
         } else if (isDpHyp) {
             if (isOtherJoinReorder) {
-                return getRuleSet().getDPHypReorderRules();
+                exploreRules.addAll(getRuleSet().getDPHypReorderRules());
             } else {
-                return Collections.emptyList();
+                //todo
             }
         } else if (isEnableBushyTree) {
-            return getRuleSet().getBushyTreeJoinReorder();
+            exploreRules.addAll(getRuleSet().getBushyTreeJoinReorder());
         } else if (context.getCascadesContext().getStatementContext().getMaxNAryInnerJoin() <= joinNumBushyTree) {
-            return getRuleSet().getBushyTreeJoinReorder();
+            exploreRules.addAll(getRuleSet().getBushyTreeJoinReorder());
         } else {
-            return getRuleSet().getZigZagTreeJoinReorder();
+            exploreRules.addAll(getRuleSet().getZigZagTreeJoinReorder());
         }
+        return exploreRules;
     }
 }

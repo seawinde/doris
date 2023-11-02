@@ -92,6 +92,7 @@ import org.apache.doris.nereids.rules.rewrite.PushdownFilterThroughSort;
 import org.apache.doris.nereids.rules.rewrite.PushdownFilterThroughWindow;
 import org.apache.doris.nereids.rules.rewrite.PushdownJoinOtherCondition;
 import org.apache.doris.nereids.rules.rewrite.PushdownProjectThroughLimit;
+import org.apache.doris.nereids.rules.rewrite.mv.MaterializedViewProjectJoinRule;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
@@ -212,6 +213,10 @@ public class RuleSet {
             .add(JoinCommute.BUSHY.build())
             .build();
 
+    public static final List<Rule> MATERIALIZED_VIEW_RULES = planRuleFactories()
+            .add(MaterializedViewProjectJoinRule.INSTANCE)
+            .build();
+
     public List<Rule> getDPHypReorderRules() {
         return DPHYP_REORDER_RULES;
     }
@@ -226,6 +231,10 @@ public class RuleSet {
 
     public List<Rule> getImplementationRules() {
         return IMPLEMENTATION_RULES;
+    }
+
+    public List<Rule> getMaterializedViewRules() {
+        return MATERIALIZED_VIEW_RULES;
     }
 
     public static RuleFactories planRuleFactories() {

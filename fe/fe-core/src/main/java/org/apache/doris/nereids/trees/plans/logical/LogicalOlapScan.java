@@ -305,7 +305,7 @@ public class LogicalOlapScan extends LogicalCatalogRelation implements OlapScan 
             if (cacheSlotWithSlotName.containsKey(Pair.of(selectedIndexId, col.getName()))) {
                 return cacheSlotWithSlotName.get(Pair.of(selectedIndexId, col.getName()));
             }
-            Slot slot = SlotReference.fromColumn(col, qualified());
+            Slot slot = SlotReference.fromColumn(col, qualified(), relationId);
             cacheSlotWithSlotName.put(Pair.of(selectedIndexId, col.getName()), slot);
             return slot;
         }).collect(ImmutableList.toImmutableList());
@@ -343,7 +343,7 @@ public class LogicalOlapScan extends LogicalCatalogRelation implements OlapScan 
         if (cacheSlotWithSlotName.containsKey(Pair.of(indexId, name))) {
             return cacheSlotWithSlotName.get(Pair.of(indexId, name));
         }
-        Slot slot = SlotReference.fromColumn(column, name, qualified());
+        Slot slot = SlotReference.fromColumn(column, name, qualified(), relationId);
         cacheSlotWithSlotName.put(Pair.of(indexId, name), slot);
         return slot;
     }
