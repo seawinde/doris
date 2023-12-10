@@ -36,6 +36,7 @@ import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
 import org.apache.doris.nereids.util.ExpressionUtils;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
 
 import java.util.ArrayList;
@@ -199,7 +200,7 @@ public abstract class AbstractMaterializedViewRule {
                     wiAlias);
             if (replacedExpression.anyMatch(slotsToRewrite::contains)) {
                 // if contains any slot to rewrite, which means can not be rewritten by target, bail out
-                return null;
+                return ImmutableList.of();
             }
             rewrittenExpressions.add(replacedExpression);
         }

@@ -327,7 +327,7 @@ public class ExpressionUtils {
      */
     public static Expression replace(Expression expr, Map<? extends Expression, ? extends Expression> replaceMap,
             boolean withAlias) {
-        return expr.accept(ExpressionReplacer.INSTANCE, ExpressionReplacerContext.of(replaceMap, true));
+        return expr.accept(ExpressionReplacer.INSTANCE, ExpressionReplacerContext.of(replaceMap, withAlias));
     }
 
     /**

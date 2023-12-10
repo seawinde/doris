@@ -61,7 +61,7 @@ public abstract class AbstractMaterializedViewJoinRule extends AbstractMateriali
                 queryToViewSlotMappings
         );
         // Can not rewrite, bail out
-        if (expressionsRewritten == null
+        if (expressionsRewritten.isEmpty()
                 || expressionsRewritten.stream().anyMatch(expr -> !(expr instanceof NamedExpression))) {
             return null;
         }

@@ -128,7 +128,8 @@ public class StructInfo {
             // if inner join add where condition
             Set<Expression> predicates = new HashSet<>();
             nodePlan.accept(PREDICATE_COLLECTOR, predicates);
-            predicates.forEach(this.predicates::addPredicate);
+            predicates.forEach(predicate ->
+                    ExpressionUtils.extractConjunction(predicate).forEach(this.predicates::addPredicate));
         });
 
         // TODO Collect predicate from top plan not in hyper graph, should optimize, twice now
