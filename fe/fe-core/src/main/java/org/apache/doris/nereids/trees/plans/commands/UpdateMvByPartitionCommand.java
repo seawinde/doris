@@ -113,7 +113,7 @@ public class UpdateMvByPartitionCommand extends InsertOverwriteTableCommand {
                 .collect(ImmutableSet.toImmutableSet());
     }
 
-    private static Expression convertPartitionItemToPredicate(PartitionItem item, Slot col) {
+    public static Expression convertPartitionItemToPredicate(PartitionItem item, Slot col) {
         if (item instanceof ListPartitionItem) {
             List<Expression> inValues = ((ListPartitionItem) item).getItems().stream()
                     .map(key -> Literal.fromLegacyLiteral(key.getKeys().get(0),

@@ -20,6 +20,7 @@ package org.apache.doris.nereids.trees.expressions.functions.agg;
 import org.apache.doris.nereids.exceptions.UnboundException;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.functions.BoundFunction;
+import org.apache.doris.nereids.trees.expressions.functions.Function;
 import org.apache.doris.nereids.trees.expressions.typecoercion.ExpectsInputTypes;
 import org.apache.doris.nereids.trees.expressions.visitor.ExpressionVisitor;
 import org.apache.doris.nereids.types.DataType;
@@ -75,6 +76,10 @@ public abstract class AggregateFunction extends BoundFunction implements Expects
 
     public boolean isDistinct() {
         return distinct;
+    }
+
+    public Class<? extends Function> getRollup() {
+        return null;
     }
 
     @Override

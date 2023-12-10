@@ -253,7 +253,7 @@ public class MTMVUtil {
         List<Partition> res = Lists.newArrayList();
         Collection<Partition> allPartitions = mtmv.getPartitions();
         // check session variable if enable rewrite
-        if (!ctx.getSessionVariable().isEnableMvRewrite()) {
+        if (!ctx.getSessionVariable().isEnableMaterializedViewRewrite()) {
             return res;
         }
         MTMVRelation mtmvRelation = mtmv.getRelation();

@@ -17,13 +17,28 @@
 
 package org.apache.doris.nereids.rules.exploration.mv;
 
+import org.apache.doris.catalog.MTMV;
+import org.apache.doris.catalog.Partition;
+import org.apache.doris.catalog.PartitionInfo;
+import org.apache.doris.catalog.PartitionItem;
+import org.apache.doris.catalog.PartitionType;
 import org.apache.doris.catalog.TableIf;
+import org.apache.doris.common.AnalysisException;
+import org.apache.doris.mtmv.MTMVCache;
+import org.apache.doris.mtmv.MTMVPartitionInfo;
+import org.apache.doris.mtmv.MTMVUtil;
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.rules.exploration.mv.Predicates.SplitPredicate;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.EquivalenceClassSetMapping;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.ExpressionMapping;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.RelationMapping;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.SlotMapping;
+import org.apache.doris.nereids.rules.expression.CheckLegalityAfterRewrite;
+import org.apache.doris.nereids.rules.expression.ExpressionNormalization;
+import org.apache.doris.nereids.rules.expression.ExpressionOptimization;
+import org.apache.doris.nereids.rules.expression.ExpressionRewrite;
+import org.apache.doris.nereids.rules.expression.ExpressionRewriteContext;
+import org.apache.doris.nereids.trees.expressions.Alias;
 import org.apache.doris.nereids.trees.expressions.EqualTo;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
@@ -31,14 +46,22 @@ import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.literal.BooleanLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
+import org.apache.doris.nereids.trees.plans.JoinType;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
+import org.apache.doris.nereids.trees.plans.commands.UpdateMvByPartitionCommand;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
 import org.apache.doris.nereids.util.ExpressionUtils;
+import org.apache.doris.qe.ConnectContext;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -50,6 +73,9 @@ import java.util.stream.Collectors;
  * The abstract class for all materialized view rules
  */
 public abstract class AbstractMaterializedViewRule {
+    public static final HashSet<JoinType> SUPPORTED_JOIN_TYPE_SET =
+            Sets.newHashSet(JoinType.INNER_JOIN, JoinType.LEFT_OUTER_JOIN);
+    private final Logger logger = LogManager.getLogger(this.getClass());
 
     /**
      * The abstract template method for query rewrite, it contains the main logic and different query
@@ -76,7 +102,10 @@ public abstract class AbstractMaterializedViewRule {
                     queryPlan.getGroupExpression().get().getOwnerGroup().getGroupId())) {
                 continue;
             }
-            Plan mvPlan = materializationContext.getMtmv().getCache().getLogicalPlan();
+            Plan mvPlan = handleValidPartition(materializationContext.getMtmv(), cascadesContext);
+            if (mvPlan == null) {
+                continue;
+            }
             List<StructInfo> viewStructInfos = extractStructInfo(mvPlan, cascadesContext);
             if (viewStructInfos.size() > 1) {
                 // view struct info should only have one
@@ -105,8 +134,14 @@ public abstract class AbstractMaterializedViewRule {
                         LogicalCompatibilityContext.from(queryToViewTableMapping, queryToViewSlotMapping,
                                 queryStructInfo, viewStructInfo);
                 // todo outer join compatibility check
-                if (StructInfo.isGraphLogicalEquals(queryStructInfo, viewStructInfo, compatibilityContext) == null) {
+                List<Expression> pulledUpExpressions = StructInfo.isGraphLogicalEquals(queryStructInfo, viewStructInfo,
+                        compatibilityContext);
+                if (pulledUpExpressions == null) {
                     continue;
+                }
+                // set pulled up expression to queryStructInfo predicates and update related predicates
+                if (!pulledUpExpressions.isEmpty()) {
+                    queryStructInfo.addPredicates(pulledUpExpressions);
                 }
                 SplitPredicate compensatePredicates = predicatesCompensate(queryStructInfo, viewStructInfo,
                         queryToViewSlotMapping);
@@ -122,8 +157,10 @@ public abstract class AbstractMaterializedViewRule {
                     // Try to rewrite compensate predicates by using mv scan
                     List<Expression> rewriteCompensatePredicates = rewriteExpression(
                             compensatePredicates.toList(),
-                            materializationContext.getViewExpressionIndexMapping(),
-                            queryToViewSlotMapping);
+                            queryPlan,
+                            materializationContext.getMvExprToMvScanExprMapping(),
+                            queryToViewSlotMapping,
+                            true);
                     if (rewriteCompensatePredicates.isEmpty()) {
                         continue;
                     }
@@ -145,28 +182,102 @@ public abstract class AbstractMaterializedViewRule {
         return rewriteResults;
     }
 
+    private MTMVCache getCacheFromMTMV(MTMV mtmv) {
+        MTMVCache cache;
+        try {
+            cache = mtmv.getOrGenerateCache();
+        } catch (AnalysisException analysisException) {
+            logger.warn("get mtmv cache analysisException", analysisException);
+            return null;
+        }
+        return cache;
+    }
+
+    // return the plan with filter if some partition is valid
+    private Plan handleValidPartition(MTMV mtmv, CascadesContext cascadesContext) {
+        PartitionInfo partitionInfo = mtmv.getPartitionInfo();
+        PartitionType partitionType = partitionInfo.getType();
+        MTMVCache mtmvCache = getCacheFromMTMV(mtmv);
+        if (mtmvCache == null) {
+            return null;
+        }
+        if (PartitionType.UNPARTITIONED.equals(partitionType)) {
+            // not handle un partition table
+            return mtmvCache.getLogicalPlan();
+        }
+        Map<Long, PartitionItem> allPartitions = partitionInfo.getAllPartitions();
+        Collection<Partition> dataValidPartitions = MTMVUtil.getMTMVCanRewritePartitions(mtmv,
+                cascadesContext.getConnectContext());
+        if (!allPartitions.isEmpty() && dataValidPartitions.isEmpty()) {
+            // do not have valid partition
+            return null;
+        }
+        if (allPartitions.size() == dataValidPartitions.size()) {
+            // todo deep equals check,all partition is valid just return the plan
+            return mtmvCache.getLogicalPlan();
+        }
+        // handle the scene when some partition is valid
+        Set<Expression> disjunctions = new HashSet<>();
+        Set<Long> allPartitionIdSet = allPartitions.keySet();
+        Plan logicalPlan = mtmvCache.getLogicalPlan();
+        // get mv partition column name
+        Map<String, Slot> mvPlanOutputNameMap = new HashMap<>();
+        logicalPlan.getOutput().forEach(slot -> mvPlanOutputNameMap.putIfAbsent(slot.getName(), slot));
+        MTMVPartitionInfo mvPartitionInfo = mtmv.getMvPartitionInfo();
+        Slot partitionColumnSlot = mvPlanOutputNameMap.get(mvPartitionInfo.getPartitionCol());
+        if (partitionColumnSlot == null) {
+            return null;
+        }
+        for (Partition validPartition : dataValidPartitions) {
+            if (!allPartitionIdSet.contains(validPartition.getId())) {
+                return null;
+            }
+            disjunctions.add(UpdateMvByPartitionCommand.convertPartitionItemToPredicate(
+                    allPartitions.get(validPartition.getId()),
+                    partitionColumnSlot
+            ));
+        }
+
+        // filter condition optimization
+        ExpressionOptimization expressionOptimization = new ExpressionOptimization();
+        ExpressionNormalization expressionNormalization = new ExpressionNormalization();
+        ExpressionRewriteContext expressionRewriteContext = new ExpressionRewriteContext(cascadesContext);
+        Expression optimizedExpression = expressionOptimization.rewrite(ExpressionUtils.or(disjunctions),
+                        expressionRewriteContext);
+        optimizedExpression = expressionNormalization.rewrite(optimizedExpression, expressionRewriteContext);
+        return new LogicalFilter<>(ExpressionUtils.extractConjunctionToSet(optimizedExpression), mtmvCache.getLogicalPlan());
+    }
+
     /**
      * Rewrite query by view, for aggregate or join rewriting should be different inherit class implementation
      */
     protected Plan rewriteQueryByView(MatchMode matchMode,
             StructInfo queryStructInfo,
             StructInfo viewStructInfo,
-            SlotMapping queryToViewSlotMappings,
+            SlotMapping queryToViewSlotMapping,
             Plan tempRewritedPlan,
             MaterializationContext materializationContext) {
         return tempRewritedPlan;
     }
 
     /**
-     * Use target output expression to represent the source expression
+     * Use target expression to represent the source expression. Visit the source expression,
+     * try to replace the source expression with target expression in targetExpressionMapping, if found then
+     * replace the source expression by target expression mapping value.
+     * Note: make the target expression map key to source based according to targetExpressionNeedSourceBased,
+     * if targetExpressionNeedSourceBased is true, we should make it source based.
+     * the key expression in targetExpressionMapping should be shuttled. with the method
+     * ExpressionUtils.shuttleExpressionWithLineage.
      */
     protected List<Expression> rewriteExpression(
             List<? extends Expression> sourceExpressionsToWrite,
-            ExpressionMapping mvExprToMvScanExprMapping,
-            SlotMapping sourceToTargetMapping) {
-        // Firstly, rewrite the target plan output expression using query with inverse mapping
-        // then try to use the mv expression to represent the query. if any of source expressions
-        // can not be represented by mv, return null
+            Plan sourcePlan,
+            ExpressionMapping targetExpressionMapping,
+            SlotMapping sourceToTargetMapping,
+            boolean targetExpressionNeedSourceBased) {
+        // Firstly, rewrite the target expression using source with inverse mapping
+        // then try to use the target expression to represent the query. if any of source expressions
+        // can not be represented by target expressions, return null.
         //
         // example as following:
         //     source                           target
@@ -176,34 +287,56 @@ public abstract class AbstractMaterializedViewRule {
         //     transform source to:
         //        project(slot 2, 1)
         //            target
-        // generate mvSql to mvScan mvExprToMvScanExprMapping, and change mv sql expression to query based
-        ExpressionMapping mvExprToMvScanExprMappingKeySourceBased =
-                mvExprToMvScanExprMapping.keyPermute(sourceToTargetMapping.inverse());
-        List<Map<? extends Expression, ? extends Expression>> flattenExpressionMapping =
-                mvExprToMvScanExprMappingKeySourceBased.flattenMap();
-        // view to view scan expression is 1:1 so get first element
-        Map<? extends Expression, ? extends Expression> mvSqlToMvScanMappingQueryBased =
-                flattenExpressionMapping.get(0);
+        // generate target to target replacement expression mapping, and change target expression to source based
+        List<? extends Expression> sourceShuttledExpressions =
+                ExpressionUtils.shuttleExpressionWithLineage(sourceExpressionsToWrite, sourcePlan);
+        ExpressionMapping expressionMappingKeySourceBased = targetExpressionNeedSourceBased
+                ? targetExpressionMapping.keyPermute(sourceToTargetMapping.inverse()) : targetExpressionMapping;
+        // target to target replacement expression mapping, because mv is 1:1 so get first element
+        List<Map<Expression, Expression>> flattenExpressionMap =
+                expressionMappingKeySourceBased.flattenMap();
+        Map<? extends Expression, ? extends Expression> targetToTargetReplacementMapping = flattenExpressionMap.get(0);
 
         List<Expression> rewrittenExpressions = new ArrayList<>();
-        for (Expression expressionToRewrite : sourceExpressionsToWrite) {
+        for (int index = 0; index < sourceShuttledExpressions.size(); index++) {
+            Expression expressionToRewrite = sourceShuttledExpressions.get(index);
             if (expressionToRewrite instanceof Literal) {
                 rewrittenExpressions.add(expressionToRewrite);
                 continue;
             }
             final Set<Object> slotsToRewrite =
                     expressionToRewrite.collectToSet(expression -> expression instanceof Slot);
-            boolean wiAlias = expressionToRewrite instanceof NamedExpression;
             Expression replacedExpression = ExpressionUtils.replace(expressionToRewrite,
-                    mvSqlToMvScanMappingQueryBased,
-                    wiAlias);
+                    targetToTargetReplacementMapping);
             if (replacedExpression.anyMatch(slotsToRewrite::contains)) {
                 // if contains any slot to rewrite, which means can not be rewritten by target, bail out
-                return null;
+                return ImmutableList.of();
+            }
+            Expression sourceExpression = sourceExpressionsToWrite.get(index);
+            if (sourceExpression instanceof NamedExpression) {
+                NamedExpression sourceNamedExpression = (NamedExpression) sourceExpression;
+                replacedExpression = new Alias(sourceNamedExpression.getExprId(), replacedExpression,
+                        sourceNamedExpression.getName());
             }
             rewrittenExpressions.add(replacedExpression);
         }
         return rewrittenExpressions;
+    }
+
+    protected Expression rewriteExpression(
+            Expression sourceExpressionsToWrite,
+            Plan sourcePlan,
+            ExpressionMapping targetExpressionMapping,
+            SlotMapping sourceToTargetMapping,
+            boolean targetExpressionNeedSourceBased) {
+        List<Expression> expressionToRewrite = new ArrayList<>();
+        expressionToRewrite.add(sourceExpressionsToWrite);
+        List<Expression> rewrittenExpressions = rewriteExpression(expressionToRewrite, sourcePlan,
+                targetExpressionMapping, sourceToTargetMapping, targetExpressionNeedSourceBased);
+        if (rewrittenExpressions.isEmpty()) {
+            return null;
+        }
+        return rewrittenExpressions.get(0);
     }
 
     /**

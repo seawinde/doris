@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-suite("inner_join") {
+suite("aggregate_with_roll_up") {
     String db = context.config.getDbNameByFile(context.file)
     sql "use ${db}"
     sql "SET enable_nereids_planner=true"
@@ -42,6 +42,7 @@ suite("inner_join") {
       O_COMMENT        VARCHAR(79) NOT NULL
     )
     DUPLICATE KEY(O_ORDERKEY, O_CUSTKEY)
+    PARTITION BY RANGE(O_ORDERDATE) (PARTITION `day_2` VALUES LESS THAN ('2023-12-30'))
     DISTRIBUTED BY HASH(O_ORDERKEY) BUCKETS 3
     PROPERTIES (
       "replication_num" = "1"
@@ -72,6 +73,7 @@ suite("inner_join") {
       L_COMMENT      VARCHAR(44) NOT NULL
     )
     DUPLICATE KEY(L_ORDERKEY, L_PARTKEY, L_SUPPKEY, L_LINENUMBER)
+    PARTITION BY RANGE(L_SHIPDATE) (PARTITION `day_1` VALUES LESS THAN ('2023-12-30'))
     DISTRIBUTED BY HASH(L_ORDERKEY) BUCKETS 3
     PROPERTIES (
       "replication_num" = "1"
@@ -102,7 +104,8 @@ suite("inner_join") {
 
     sql """
     insert into orders values (1, 1, 'ok', 99.5, '2023-12-08', 'a', 'b', 1, 'yy'),
-    (2, 2, 'ok', 109.2, '2023-12-09', 'c','d',2, 'mm');  
+    (2, 2, 'ok', 109.2, '2023-12-11', 'c','d',2, 'mm'),
+    (1, 2, 'ok', 109.2, '2023-12-11', 'c','d',2, 'mi');  
     """
 
     sql """
@@ -148,84 +151,87 @@ suite("inner_join") {
         }
     }
 
-    // select + from + inner join
-    def mv1_0 = "select  lineitem.L_LINENUMBER, orders.O_CUSTKEY " +
+    // select + from + inner join + group by
+    def mv1_0 = "select lineitem.L_LINENUMBER, orders.O_CUSTKEY, sum(O_TOTALPRICE) as sum_alias " +
             "from lineitem " +
-            "inner join orders on lineitem.L_ORDERKEY = orders.O_ORDERKEY "
-    def query1_0 = "select lineitem.L_LINENUMBER " +
+            "inner join orders on lineitem.L_ORDERKEY = orders.O_ORDERKEY " +
+            "group by lineitem.L_LINENUMBER, orders.O_CUSTKEY "
+    def query1_0 = "select lineitem.L_LINENUMBER, sum(O_TOTALPRICE) as sum_alias " +
             "from lineitem " +
-            "inner join orders on lineitem.L_ORDERKEY = orders.O_ORDERKEY "
+            "inner join orders on lineitem.L_ORDERKEY = orders.O_ORDERKEY " +
+            "group by lineitem.L_LINENUMBER"
     order_qt_query1_0_before "${query1_0}"
     check_rewrite(mv1_0, query1_0, "mv1_0")
     order_qt_query1_0_after "${query1_0}"
     sql """ DROP MATERIALIZED VIEW IF EXISTS mv1_0"""
 
 
-    def mv1_1 = "select  lineitem.L_LINENUMBER, orders.O_CUSTKEY, partsupp.PS_AVAILQTY " +
-            "from lineitem " +
-            "inner join orders on lineitem.L_ORDERKEY = orders.O_ORDERKEY " +
-            "inner join partsupp on lineitem.L_PARTKEY = partsupp.PS_PARTKEY " +
-            "and lineitem.L_SUPPKEY = partsupp.PS_SUPPKEY"
-    def query1_1 = "select  lineitem.L_LINENUMBER " +
-            "from lineitem " +
-            "inner join orders on lineitem.L_ORDERKEY = orders.O_ORDERKEY " +
-            "inner join partsupp on lineitem.L_PARTKEY = partsupp.PS_PARTKEY " +
-            "and lineitem.L_SUPPKEY = partsupp.PS_SUPPKEY"
-    order_qt_query1_1_before "${query1_1}"
-    check_rewrite(mv1_1, query1_1, "mv1_1")
-    order_qt_query1_1_after "${query1_1}"
-    sql """ DROP MATERIALIZED VIEW IF EXISTS mv1_1"""
-
-
-    def mv1_2 = "select  lineitem.L_LINENUMBER, orders.O_CUSTKEY " +
+    // select case when + from + where + group by roll up
+    def mv1_1 = "select O_ORDERDATE, O_SHIPPRIORITY, O_COMMENT, " +
+            "bitmap_union(to_bitmap(case when O_SHIPPRIORITY > 1 and O_ORDERKEY IN (1, 3) then O_CUSTKEY else null end)) cnt_1, " +
+            "bitmap_union(to_bitmap(case when O_SHIPPRIORITY > 2 and O_ORDERKEY IN (2) then O_CUSTKEY else null end)) as cnt_2 " +
             "from orders " +
-            "inner join lineitem on lineitem.L_ORDERKEY = orders.O_ORDERKEY "
-    def query1_2 = "select lineitem.L_LINENUMBER " +
+            "group by " +
+            "O_ORDERDATE, " +
+            "O_SHIPPRIORITY, " +
+            "O_COMMENT "
+    def query1_1 = "select O_SHIPPRIORITY, O_COMMENT, " +
+            "count(distinct case when O_SHIPPRIORITY > 1 and O_ORDERKEY IN (1, 3) then O_CUSTKEY else null end) as cnt_1, " +
+            "count(distinct case when O_SHIPPRIORITY > 2 and O_ORDERKEY IN (2) then O_CUSTKEY else null end) as cnt_2 " +
+            "from orders " +
+            "where O_ORDERDATE = '2023-12-09' " +
+            "group by " +
+            "O_SHIPPRIORITY, " +
+            "O_COMMENT "
+//     order_qt_query1_1_before "${query1_1}"
+//     unsupported, need to fix, because create materialized view contains bitmap which is not supported
+//     check_rewrite(mv1_1, query1_1, "mv1_1")
+//     order_qt_query1_1_after "${query1_1}"
+//     sql """ DROP MATERIALIZED VIEW IF EXISTS mv1_1"""
+
+
+    def mv1_2 = "select O_ORDERDATE, O_SHIPPRIORITY, O_COMMENT, " +
+            "bitmap_union(to_bitmap(O_CUSTKEY)) as cnt_1, " +
+            "bitmap_union(to_bitmap(O_CUSTKEY)) as cnt_2 " +
+            "from orders " +
+            "group by " +
+            "O_ORDERDATE, " +
+            "O_SHIPPRIORITY, " +
+            "O_COMMENT "
+    def query1_2 = "select O_SHIPPRIORITY, O_COMMENT, " +
+            "count(distinct O_CUSTKEY) as cnt_1, " +
+            "count(distinct O_ORDERKEY) as cnt_2 " +
+            "from orders " +
+            "where O_ORDERDATE = '2023-12-09' " +
+            "group by " +
+            "O_SHIPPRIORITY, " +
+            "O_COMMENT "
+    // order_qt_query1_2_before "${query1_2}"
+    // unsupported, need to fix
+    // check_rewrite(mv1_2, query1_2, "mv1_2")
+    // order_qt_query1_2_after "${query1_2}"
+    // sql """ DROP MATERIALIZED VIEW IF EXISTS mv1_2"""
+
+
+
+    // select + from + where +  outer join + group by roll up
+    def mv2_0 = "select L_SHIPDATE, O_ORDERDATE, L_PARTKEY, L_SUPPKEY, sum(O_TOTALPRICE) as sum_total " +
             "from lineitem " +
-            "inner join orders on lineitem.L_ORDERKEY = orders.O_ORDERKEY "
-    order_qt_query1_2_before "${query1_2}"
-    check_rewrite(mv1_2, query1_2, "mv1_2")
-    order_qt_query1_2_after "${query1_2}"
-    sql """ DROP MATERIALIZED VIEW IF EXISTS mv1_2"""
-
-    // select + from + inner join + filter
-    def mv1_3 = "select  lineitem.L_LINENUMBER, orders.O_CUSTKEY " +
-            "from orders " +
-            "inner join lineitem on lineitem.L_ORDERKEY = orders.O_ORDERKEY "
-    def query1_3 = "select lineitem.L_LINENUMBER " +
-            "from lineitem " +
-            "inner join orders on lineitem.L_ORDERKEY = orders.O_ORDERKEY " +
-            "where lineitem.L_LINENUMBER > 10"
-    order_qt_query1_3_before "${query1_3}"
-    check_rewrite(mv1_3, query1_3, "mv1_3")
-    // tmp annotation, will fix later
-    order_qt_query1_3_after "${query1_3}"
-    sql """ DROP MATERIALIZED VIEW IF EXISTS mv1_3"""
-
-    // select with complex expression + from + inner join
-    def mv1_4 = "select  lineitem.L_LINENUMBER, orders.O_CUSTKEY " +
-            "from orders " +
-            "inner join lineitem on lineitem.L_ORDERKEY = orders.O_ORDERKEY "
-    def query1_4 = "select IFNULL(orders.O_CUSTKEY, 0) as custkey_not_null " +
-            "from orders " +
-            "inner join lineitem on orders.O_ORDERKEY = lineitem.L_ORDERKEY"
-    order_qt_query1_4_before "${query1_4}"
-    check_rewrite(mv1_4, query1_4, "mv1_4")
-    order_qt_query1_4_after "${query1_4}"
-    sql """ DROP MATERIALIZED VIEW IF EXISTS mv1_4"""
-
-
-    // check not match, because use a filed orders.O_SHIPPRIORITY which not in mv
-    def mv10_0 = "select lineitem.L_LINENUMBER, orders.O_CUSTKEY " +
-            "from lineitem " +
-            "inner join orders on lineitem.L_ORDERKEY = orders.O_ORDERKEY"
-    def query10_0 = "select orders.O_CUSTKEY " +
-            "from orders " +
-            "inner join lineitem on orders.O_ORDERKEY = lineitem.L_ORDERKEY " +
-            "WHERE lineitem.L_LINENUMBER > 10 AND orders.O_CUSTKEY = 5 AND " +
-            "orders.O_SHIPPRIORITY = 1"
-    order_qt_query10_0_before "${query10_0}"
-    check_not_match(mv10_0, query10_0, "mv10_0")
-    order_qt_query10_0_after "${query10_0}"
-    sql """ DROP MATERIALIZED VIEW IF EXISTS mv10_0"""
+            "left join orders on lineitem.L_ORDERKEY = orders.O_ORDERKEY and L_SHIPDATE = O_ORDERDATE " +
+            "group by " +
+            "L_SHIPDATE, " +
+            "O_ORDERDATE, " +
+            "L_PARTKEY, " +
+            "L_SUPPKEY"
+    def query2_0 = "select t1.L_PARTKEY, t1.L_SUPPKEY, O_ORDERDATE, sum(O_TOTALPRICE) " +
+            "from (select * from lineitem where L_SHIPDATE = '2023-12-11') t1 " +
+            "left join orders on t1.L_ORDERKEY = orders.O_ORDERKEY and t1.L_SHIPDATE = O_ORDERDATE " +
+            "group by " +
+            "O_ORDERDATE, " +
+            "L_PARTKEY, " +
+            "L_SUPPKEY"
+    order_qt_query2_0_before "${query2_0}"
+    check_rewrite(mv2_0, query2_0, "mv2_0")
+    order_qt_query2_0_after "${query2_0}"
+    sql """ DROP MATERIALIZED VIEW IF EXISTS mv2_0"""
 }
