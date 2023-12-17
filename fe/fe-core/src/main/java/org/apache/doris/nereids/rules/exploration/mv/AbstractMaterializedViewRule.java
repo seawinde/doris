@@ -18,12 +18,14 @@
 package org.apache.doris.nereids.rules.exploration.mv;
 
 import org.apache.doris.catalog.MTMV;
+import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Partition;
 import org.apache.doris.catalog.PartitionInfo;
 import org.apache.doris.catalog.PartitionItem;
 import org.apache.doris.catalog.PartitionType;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.AnalysisException;
+import org.apache.doris.mtmv.BaseTableInfo;
 import org.apache.doris.mtmv.MTMVCache;
 import org.apache.doris.mtmv.MTMVPartitionInfo;
 import org.apache.doris.mtmv.MTMVUtil;
@@ -33,11 +35,6 @@ import org.apache.doris.nereids.rules.exploration.mv.mapping.EquivalenceClassSet
 import org.apache.doris.nereids.rules.exploration.mv.mapping.ExpressionMapping;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.RelationMapping;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.SlotMapping;
-import org.apache.doris.nereids.rules.expression.CheckLegalityAfterRewrite;
-import org.apache.doris.nereids.rules.expression.ExpressionNormalization;
-import org.apache.doris.nereids.rules.expression.ExpressionOptimization;
-import org.apache.doris.nereids.rules.expression.ExpressionRewrite;
-import org.apache.doris.nereids.rules.expression.ExpressionRewriteContext;
 import org.apache.doris.nereids.trees.expressions.Alias;
 import org.apache.doris.nereids.trees.expressions.EqualTo;
 import org.apache.doris.nereids.trees.expressions.Expression;
@@ -49,10 +46,9 @@ import org.apache.doris.nereids.trees.expressions.literal.Literal;
 import org.apache.doris.nereids.trees.plans.JoinType;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
-import org.apache.doris.nereids.trees.plans.commands.UpdateMvByPartitionCommand;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
+import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
 import org.apache.doris.nereids.util.ExpressionUtils;
-import org.apache.doris.qe.ConnectContext;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
@@ -61,11 +57,11 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -102,11 +98,12 @@ public abstract class AbstractMaterializedViewRule {
                     queryPlan.getGroupExpression().get().getOwnerGroup().getGroupId())) {
                 continue;
             }
-            Plan mvPlan = handleValidPartition(materializationContext.getMtmv(), cascadesContext);
-            if (mvPlan == null) {
-                continue;
+            MTMV mtmv = materializationContext.getMtmv();
+            MTMVCache mtmvCache = getCacheFromMTMV(mtmv);
+            if (mtmvCache == null) {
+                return null;
             }
-            List<StructInfo> viewStructInfos = extractStructInfo(mvPlan, cascadesContext);
+            List<StructInfo> viewStructInfos = extractStructInfo(mtmvCache.getLogicalPlan(), cascadesContext);
             if (viewStructInfos.size() > 1) {
                 // view struct info should only have one
                 return rewriteResults;
@@ -176,10 +173,77 @@ public abstract class AbstractMaterializedViewRule {
                 if (rewritedPlan == null) {
                     continue;
                 }
+                if (!checkPartitionIsValid(queryStructInfo, materializationContext, cascadesContext)) {
+                    continue;
+                }
                 rewriteResults.add(rewritedPlan);
             }
         }
         return rewriteResults;
+    }
+
+    protected boolean checkPartitionIsValid(
+            StructInfo queryInfo,
+            MaterializationContext materializationContext,
+            CascadesContext cascadesContext) {
+        // check partition is valid or not
+        MTMV mtmv = materializationContext.getMtmv();
+        PartitionInfo mvPartitionInfo = mtmv.getPartitionInfo();
+        if (PartitionType.UNPARTITIONED.equals(mvPartitionInfo.getType())) {
+            // if not partition, if rewrite success, it means mv is available
+            return true;
+        }
+        // check mv related table partition is valid or not
+        MTMVPartitionInfo mvCustomPartitionInfo = mtmv.getMvPartitionInfo();
+        BaseTableInfo relatedPartitionTable = mvCustomPartitionInfo.getRelatedTable();
+        if (relatedPartitionTable == null) {
+            return true;
+        }
+        Optional<LogicalOlapScan> relatedTableRelation = queryInfo.getRelations().stream()
+                .filter(relation -> relatedPartitionTable.equals(new BaseTableInfo(relation.getTable()))
+                        && relation instanceof LogicalOlapScan)
+                .map(relation -> (LogicalOlapScan) relation)
+                .findFirst();
+        if (!relatedTableRelation.isPresent()) {
+            logger.warn("mv is partition update, but related table relation is null");
+            return false;
+        }
+        OlapTable relatedTable = relatedTableRelation.get().getTable();
+        Map<Long, Set<Long>> mvToBasePartitionMap;
+        try {
+            mvToBasePartitionMap = MTMVUtil.getMvToBasePartitions(mtmv, relatedTable);
+        } catch (AnalysisException e) {
+            logger.error("mvRewriteSuccess getMvToBasePartitions fail", e);
+            return false;
+        }
+        // get mv valid partitions
+        Collection<Partition> mvDataValidPartitions = MTMVUtil.getMTMVCanRewritePartitions(mtmv,
+                cascadesContext.getConnectContext());
+        Map<Long, PartitionItem> allPartitions = mvPartitionInfo.getAllPartitions();
+        if (!allPartitions.isEmpty() && mvDataValidPartitions.isEmpty()) {
+            // do not have valid partition
+            return false;
+        }
+        // get mv related table valid partitions
+        Set<Long> relatedTalbeValidSet = mvDataValidPartitions.stream()
+                .map(partition -> {
+                    Set<Long> relatedBaseTablePartitions = mvToBasePartitionMap.get(partition.getId());
+                    if (relatedBaseTablePartitions == null || relatedBaseTablePartitions.isEmpty()) {
+                        return ImmutableList.of();
+                    } else {
+                        return relatedBaseTablePartitions;
+                    }
+                })
+                .flatMap(Collection::stream)
+                .map(Long.class::cast)
+                .collect(Collectors.toSet());
+        // get query selected partitions to make the partitions is valid or not
+        Set<Long> relatedTableSelectedPartitionToCheck =
+                new HashSet<>(relatedTableRelation.get().getSelectedPartitionIds());
+        if (relatedTableSelectedPartitionToCheck.isEmpty()) {
+            relatedTableSelectedPartitionToCheck.addAll(relatedTable.getPartitionIds());
+        }
+        return relatedTalbeValidSet.containsAll(relatedTableSelectedPartitionToCheck);
     }
 
     private MTMVCache getCacheFromMTMV(MTMV mtmv) {
@@ -191,61 +255,6 @@ public abstract class AbstractMaterializedViewRule {
             return null;
         }
         return cache;
-    }
-
-    // return the plan with filter if some partition is valid
-    private Plan handleValidPartition(MTMV mtmv, CascadesContext cascadesContext) {
-        PartitionInfo partitionInfo = mtmv.getPartitionInfo();
-        PartitionType partitionType = partitionInfo.getType();
-        MTMVCache mtmvCache = getCacheFromMTMV(mtmv);
-        if (mtmvCache == null) {
-            return null;
-        }
-        if (PartitionType.UNPARTITIONED.equals(partitionType)) {
-            // not handle un partition table
-            return mtmvCache.getLogicalPlan();
-        }
-        Map<Long, PartitionItem> allPartitions = partitionInfo.getAllPartitions();
-        Collection<Partition> dataValidPartitions = MTMVUtil.getMTMVCanRewritePartitions(mtmv,
-                cascadesContext.getConnectContext());
-        if (!allPartitions.isEmpty() && dataValidPartitions.isEmpty()) {
-            // do not have valid partition
-            return null;
-        }
-        if (allPartitions.size() == dataValidPartitions.size()) {
-            // todo deep equals check,all partition is valid just return the plan
-            return mtmvCache.getLogicalPlan();
-        }
-        // handle the scene when some partition is valid
-        Set<Expression> disjunctions = new HashSet<>();
-        Set<Long> allPartitionIdSet = allPartitions.keySet();
-        Plan logicalPlan = mtmvCache.getLogicalPlan();
-        // get mv partition column name
-        Map<String, Slot> mvPlanOutputNameMap = new HashMap<>();
-        logicalPlan.getOutput().forEach(slot -> mvPlanOutputNameMap.putIfAbsent(slot.getName(), slot));
-        MTMVPartitionInfo mvPartitionInfo = mtmv.getMvPartitionInfo();
-        Slot partitionColumnSlot = mvPlanOutputNameMap.get(mvPartitionInfo.getPartitionCol());
-        if (partitionColumnSlot == null) {
-            return null;
-        }
-        for (Partition validPartition : dataValidPartitions) {
-            if (!allPartitionIdSet.contains(validPartition.getId())) {
-                return null;
-            }
-            disjunctions.add(UpdateMvByPartitionCommand.convertPartitionItemToPredicate(
-                    allPartitions.get(validPartition.getId()),
-                    partitionColumnSlot
-            ));
-        }
-
-        // filter condition optimization
-        ExpressionOptimization expressionOptimization = new ExpressionOptimization();
-        ExpressionNormalization expressionNormalization = new ExpressionNormalization();
-        ExpressionRewriteContext expressionRewriteContext = new ExpressionRewriteContext(cascadesContext);
-        Expression optimizedExpression = expressionOptimization.rewrite(ExpressionUtils.or(disjunctions),
-                        expressionRewriteContext);
-        optimizedExpression = expressionNormalization.rewrite(optimizedExpression, expressionRewriteContext);
-        return new LogicalFilter<>(ExpressionUtils.extractConjunctionToSet(optimizedExpression), mtmvCache.getLogicalPlan());
     }
 
     /**

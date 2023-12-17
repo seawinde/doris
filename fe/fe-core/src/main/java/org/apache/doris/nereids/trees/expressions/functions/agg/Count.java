@@ -148,7 +148,7 @@ public class Count extends AggregateFunction
     @Override
     public Class<? extends Function> getRollup() {
         if (this.isDistinct()) {
-            return BitmapCount.class;
+            return BitmapUnionCount.class;
         } else {
             return Sum.class;
         }

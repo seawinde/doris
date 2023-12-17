@@ -438,7 +438,7 @@ public class MTMVUtil {
      * @param relatedTable
      * @return mv.partitionId ==> relatedTable.partitionId
      */
-    private static Map<Long, Set<Long>> getMvToBasePartitions(MTMV mtmv, OlapTable relatedTable)
+    public static Map<Long, Set<Long>> getMvToBasePartitions(MTMV mtmv, OlapTable relatedTable)
             throws AnalysisException {
         HashMap<Long, Set<Long>> res = Maps.newHashMap();
         Map<Long, PartitionItem> relatedTableItems = relatedTable.getPartitionInfo().getIdToItem(false);

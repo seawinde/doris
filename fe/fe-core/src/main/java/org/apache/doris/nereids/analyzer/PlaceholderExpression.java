@@ -92,7 +92,9 @@ public class PlaceholderExpression extends Expression implements AlwaysNotNullab
             return false;
         }
         PlaceholderExpression that = (PlaceholderExpression) o;
-        return position == that.position && Objects.equals(delegateClazz, that.delegateClazz);
+        return position == that.position
+                && Objects.equals(delegateClazz, that.delegateClazz)
+                && distinct == that.distinct;
     }
 
     @Override

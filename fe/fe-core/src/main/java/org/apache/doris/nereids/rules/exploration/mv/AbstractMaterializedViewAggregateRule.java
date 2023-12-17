@@ -33,12 +33,11 @@ import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.functions.Function;
 import org.apache.doris.nereids.trees.expressions.functions.agg.AggregateFunction;
 import org.apache.doris.nereids.trees.expressions.functions.agg.BitmapUnion;
+import org.apache.doris.nereids.trees.expressions.functions.agg.BitmapUnionCount;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Count;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Max;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Min;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Sum;
-import org.apache.doris.nereids.trees.expressions.functions.scalar.BitmapCount;
-import org.apache.doris.nereids.trees.expressions.functions.scalar.ToBitmap;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalAggregate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
@@ -69,9 +68,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
     static {
         AGGREGATE_ROLL_UP_EQUIVALENT_FUNCTION_MAP.put(
                 PlaceholderExpression.of(Count.class, 0, true),
-                new PlaceholderExpression(
-                        ImmutableList.of(PlaceholderExpression.of(ToBitmap.class, 0)),
-                        BitmapUnion.class, 0));
+                new PlaceholderExpression(ImmutableList.of(), BitmapUnion.class, 0));
     }
 
     @Override
@@ -153,25 +150,19 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
         for (Expression topExpression : queryTopPlan.getExpressions()) {
             // is agg function, try to roll up and rewrite
             if (queryTopPlanFunctionSet.contains(topExpression)) {
-                Expression needRollupShuttledExpr = ExpressionUtils.shuttleExpressionWithLineage(
+                Expression queryFunctionShuttled = ExpressionUtils.shuttleExpressionWithLineage(
                         topExpression,
                         queryTopPlan);
-
-                if (!mvExprToMvScanExprQueryBased.containsKey(needRollupShuttledExpr)) {
-                    // function can not rewrite by view
-                    return null;
-                }
-
                 // try to roll up
-                AggregateFunction needRollupAggFunction = (AggregateFunction) topExpression.firstMatch(
+                AggregateFunction queryFunction = (AggregateFunction) topExpression.firstMatch(
                         expr -> expr instanceof AggregateFunction);
-                Function rollupAggregateFunction = rollup(needRollupAggFunction,
-                        mvExprToMvScanExprQueryBased.get(needRollupShuttledExpr));
+                Function rollupAggregateFunction = rollup(queryFunction,
+                        queryFunctionShuttled, mvExprToMvScanExprQueryBased);
                 if (rollupAggregateFunction == null) {
                     return null;
                 }
                 // key is query need roll up expr, value is mv scan based roll up expr
-                needRollupExprMap.put(needRollupShuttledExpr, rollupAggregateFunction);
+                needRollupExprMap.put(queryFunctionShuttled, rollupAggregateFunction);
                 // rewrite query function expression by mv expression
                 Expression rewrittenFunctionExpression = rewriteExpression(topExpression,
                         queryTopPlan,
@@ -249,23 +240,44 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
     }
 
     // only support sum roll up, support other agg functions later.
-    private Function rollup(AggregateFunction originFunction,
-            Expression mappedExpression) {
-        Class<? extends Function> rollupAggregateFunction = originFunction.getRollup();
+    private Function rollup(AggregateFunction queryFunction,
+            Expression queryFunctionShuttled,
+            Map<Expression, Expression> mvExprToMvScanExprQueryBased) {
+        Expression rollupParam = null;
+        if (mvExprToMvScanExprQueryBased.containsKey(queryFunctionShuttled)) {
+            // function can not rewrite by view
+            rollupParam = mvExprToMvScanExprQueryBased.get(queryFunctionShuttled);
+        } else {
+            // try to use complex roll up param
+            // eg: query is count(distinct param), mv sql is bitmap_union(to_bitmap(param))
+            for (Expression mvExprShuttled : mvExprToMvScanExprQueryBased.keySet()) {
+                if (!(mvExprShuttled instanceof Function)) {
+                    continue;
+                }
+                if (isAggregateFunctionEquivalent(queryFunction, (Function) mvExprShuttled)) {
+                    rollupParam = mvExprToMvScanExprQueryBased.get(mvExprShuttled);
+                }
+            }
+        }
+        if (rollupParam == null) {
+            return null;
+        }
+        // do roll up
+        Class<? extends Function> rollupAggregateFunction = queryFunction.getRollup();
         if (rollupAggregateFunction == null) {
             return null;
         }
         if (Sum.class.isAssignableFrom(rollupAggregateFunction)) {
-            return new Sum(originFunction.isDistinct(), mappedExpression);
+            return new Sum(queryFunction.isDistinct(), rollupParam);
         }
         if (Max.class.isAssignableFrom(rollupAggregateFunction)) {
-            return new Max(originFunction.isDistinct(), mappedExpression);
+            return new Max(queryFunction.isDistinct(), rollupParam);
         }
         if (Min.class.isAssignableFrom(rollupAggregateFunction)) {
-            return new Min(originFunction.isDistinct(), mappedExpression);
+            return new Min(queryFunction.isDistinct(), rollupParam);
         }
-        if (BitmapCount.class.isAssignableFrom(rollupAggregateFunction)) {
-            return new BitmapCount(mappedExpression);
+        if (BitmapUnionCount.class.isAssignableFrom(rollupAggregateFunction)) {
+            return new BitmapUnionCount(rollupParam);
         }
         // can rollup return null
         return null;
@@ -345,6 +357,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
         if (queryClazz.isAssignableFrom(viewClazz)) {
             return true;
         }
+        // bitmap roll up
         boolean isDistinct = queryFunction instanceof AggregateFunction
                 && ((AggregateFunction) queryFunction).isDistinct();
         PlaceholderExpression equivalentFunction = AGGREGATE_ROLL_UP_EQUIVALENT_FUNCTION_MAP.get(
@@ -357,7 +370,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
         if (!viewFunction.getClass().isAssignableFrom(equivalentFunction.getDelegateClazz())) {
             return false;
         }
-        if (!viewFunction.children().isEmpty()) {
+        if (!viewFunction.children().isEmpty() && !equivalentFunction.children().isEmpty()) {
             // children compare, just compare two level, support more later
             List<Expression> equivalentFunctions = equivalentFunction.children();
             if (viewFunction.children().size() != equivalentFunctions.size()) {
