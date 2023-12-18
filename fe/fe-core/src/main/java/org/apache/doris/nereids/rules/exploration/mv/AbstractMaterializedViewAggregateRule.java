@@ -47,6 +47,8 @@ import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Sets;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -64,6 +66,8 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
 
     protected static final Map<PlaceholderExpression, PlaceholderExpression>
             AGGREGATE_ROLL_UP_EQUIVALENT_FUNCTION_MAP = new HashMap<>();
+    protected final String currentClassName = this.getClass().getSimpleName();
+    private final Logger logger = LogManager.getLogger(this.getClass());
 
     static {
         AGGREGATE_ROLL_UP_EQUIVALENT_FUNCTION_MAP.put(
@@ -81,10 +85,12 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
         // get view and query aggregate and top plan correspondingly
         Pair<Plan, LogicalAggregate<Plan>> viewTopPlanAndAggPair = splitToTopPlanAndAggregate(viewStructInfo);
         if (viewTopPlanAndAggPair == null) {
+            logger.info(currentClassName + "split to view to top plan and agg fail so return null");
             return null;
         }
         Pair<Plan, LogicalAggregate<Plan>> queryTopPlanAndAggPair = splitToTopPlanAndAggregate(queryStructInfo);
         if (queryTopPlanAndAggPair == null) {
+            logger.info(currentClassName + "split to query to top plan and agg fail so return null");
             return null;
         }
         // Firstly, handle query group by expression rewrite
@@ -113,6 +119,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                     true);
             if (rewrittenQueryGroupExpr.isEmpty()) {
                 // can not rewrite, bail out.
+                logger.info(currentClassName + " can not rewrite expression when not need roll up");
                 return null;
             }
             return new LogicalProject<>(
@@ -127,12 +134,14 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                 viewExpr -> viewExpr.anyMatch(expr -> expr instanceof AggregateFunction
                         && ((AggregateFunction) expr).isDistinct()))) {
             // if mv aggregate function contains distinct, can not roll up, bail out.
+            logger.info(currentClassName + " view contains distinct function so can not roll up");
             return null;
         }
         // split the query top plan expressions to group expressions and functions, if can not, bail out.
         Pair<Set<? extends Expression>, Set<? extends Expression>> queryGroupAndFunctionPair
                 = topPlanSplitToGroupAndFunction(queryTopPlanAndAggPair);
         if (queryGroupAndFunctionPair == null) {
+            logger.info(currentClassName + " query top plan split to group by and function fail so return null");
             return null;
         }
         // Secondly, try to roll up the agg functions
@@ -159,6 +168,8 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                 Function rollupAggregateFunction = rollup(queryFunction,
                         queryFunctionShuttled, mvExprToMvScanExprQueryBased);
                 if (rollupAggregateFunction == null) {
+                    logger.info(currentClassName + " query function " + queryFunction.getName()
+                            + " can not roll up so return null");
                     return null;
                 }
                 // key is query need roll up expr, value is mv scan based roll up expr
@@ -170,6 +181,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                         queryToViewSlotMapping,
                         false);
                 if (rewrittenFunctionExpression == null) {
+                    logger.info(currentClassName + " roll up expression can not rewrite by view so return null");
                     return null;
                 }
                 finalAggregateExpressions.add((NamedExpression) rewrittenFunctionExpression);
@@ -179,6 +191,8 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                         ExpressionUtils.shuttleExpressionWithLineage(topExpression, queryTopPlan);
                 if (!mvExprToMvScanExprQueryBased.containsKey(queryGroupShuttledExpr)) {
                     // group expr can not rewrite by view
+                    logger.info(currentClassName
+                            + " view group expressions can not contains the query group by expression so return null");
                     return null;
                 }
                 groupRewrittenExprMap.put(queryGroupShuttledExpr,
@@ -191,6 +205,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                         queryToViewSlotMapping,
                         true);
                 if (rewrittenGroupExpression == null) {
+                    logger.info(currentClassName + " query top expression can not be rewritten by view so return null");
                     return null;
                 }
                 finalAggregateExpressions.add((NamedExpression) rewrittenGroupExpression);

@@ -35,6 +35,7 @@ import org.apache.doris.mtmv.MTMVRefreshInfo;
 import org.apache.doris.mtmv.MTMVRelation;
 import org.apache.doris.mtmv.MTMVStatus;
 import org.apache.doris.persist.gson.GsonUtils;
+import org.apache.doris.qe.ConnectContext;
 
 import com.google.common.collect.Sets;
 import com.google.gson.annotations.SerializedName;
@@ -189,12 +190,13 @@ public class MTMV extends OlapTable {
         return Sets.newHashSet(split);
     }
 
-    public MTMVCache getOrGenerateCache() throws AnalysisException {
+    // this should use the same connectContext with query, to use the same session variable
+    public MTMVCache getOrGenerateCache(ConnectContext parent) throws AnalysisException {
         if (cache == null) {
             writeMvLock();
             try {
                 if (cache == null) {
-                    this.cache = MTMVCache.from(this, MTMVPlanUtil.createMTMVContext(this));
+                    this.cache = MTMVCache.from(this, parent);
                 }
             } finally {
                 writeMvUnlock();

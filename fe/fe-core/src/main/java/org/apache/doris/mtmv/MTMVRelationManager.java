@@ -51,7 +51,7 @@ public class MTMVRelationManager implements MTMVHookService {
 
     public Set<BaseTableInfo> getMtmvsByBaseTable(BaseTableInfo table) {
         Set<BaseTableInfo> baseTableInfos = tableMTMVs.get(table);
-        return baseTableInfos == null? ImmutableSet.of() : baseTableInfos;
+        return baseTableInfos == null ? ImmutableSet.of() : baseTableInfos;
     }
 
     public Set<MTMV> getAvailableMTMVs(List<BaseTableInfo> tableInfos) {
