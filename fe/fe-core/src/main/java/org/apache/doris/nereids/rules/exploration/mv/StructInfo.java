@@ -101,7 +101,6 @@ public class StructInfo {
         }
         collectStructInfoFromGraph();
         initPredicates();
-        predicatesDerive();
     }
 
     public void addPredicates(List<Expression> canPulledUpExpressions) {
@@ -156,6 +155,7 @@ public class StructInfo {
         Set<Expression> topPlanPredicates = new HashSet<>();
         topPlan.accept(PREDICATE_COLLECTOR, topPlanPredicates);
         topPlanPredicates.forEach(this.predicates::addPredicate);
+        predicatesDerive();
     }
 
     // derive some useful predicate by predicates

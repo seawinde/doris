@@ -30,6 +30,7 @@ import org.apache.doris.mtmv.MTMVPartitionInfo;
 import org.apache.doris.mtmv.MTMVUtil;
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.jobs.executor.Rewriter;
+import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.rules.exploration.ExplorationRuleFactory;
 import org.apache.doris.nereids.rules.exploration.mv.Predicates.SplitPredicate;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.EquivalenceClassSetMapping;
@@ -44,12 +45,15 @@ import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.literal.BooleanLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
+import org.apache.doris.nereids.trees.plans.AbstractPlan;
 import org.apache.doris.nereids.trees.plans.JoinType;
+import org.apache.doris.nereids.trees.plans.ObjectId;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
 import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
 import org.apache.doris.nereids.util.ExpressionUtils;
+import org.apache.doris.planner.PlanNodeId;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
@@ -94,13 +98,13 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             logger.debug(currentClassName + " queryStructInfo is not valid so return");
             return rewriteResults;
         }
-
+        ObjectId queryObjectId = queryPlan.getGroupExpression()
+                .map(GroupExpression::getId).orElseGet(() -> new ObjectId(-1));
         for (MaterializationContext materializationContext : materializationContexts) {
             // already rewrite, bail out
             if (queryPlan.getGroupExpression().isPresent()
                     && materializationContext.alreadyRewrite(
                     queryPlan.getGroupExpression().get().getOwnerGroup().getGroupId())) {
-                logger.debug(currentClassName + " this group is already rewritten so skip");
                 continue;
             }
             List<StructInfo> viewStructInfos = extractStructInfo(materializationContext.getMvPlan(),
@@ -112,34 +116,33 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             }
             StructInfo viewStructInfo = viewStructInfos.get(0);
             if (!checkPattern(viewStructInfo)) {
-                logger.debug(currentClassName + " viewStructInfo is not valid so return");
+                materializationContext.recordFailReason(queryObjectId, "viewStructInfo is not valid");
                 continue;
             }
             MatchMode matchMode = decideMatchMode(queryStructInfo.getRelations(), viewStructInfo.getRelations());
             if (MatchMode.COMPLETE != matchMode) {
-                logger.debug(currentClassName + " match mode is not complete so return");
+                materializationContext.recordFailReason(queryObjectId,"match mode is not 'COMPLETE'");
                 continue;
             }
             List<RelationMapping> queryToViewTableMappings =
                     RelationMapping.generate(queryStructInfo.getRelations(), viewStructInfo.getRelations());
             // if any relation in query and view can not map, bail out.
             if (queryToViewTableMappings == null) {
-                logger.warn(currentClassName + " query to view table mapping null so return");
+                materializationContext.recordFailReason(queryObjectId,"query to view table mapping null");
                 return rewriteResults;
             }
             for (RelationMapping queryToViewTableMapping : queryToViewTableMappings) {
                 SlotMapping queryToViewSlotMapping = SlotMapping.generate(queryToViewTableMapping);
                 if (queryToViewSlotMapping == null) {
-                    logger.warn(currentClassName + " query to view slot mapping null so continue");
+                    materializationContext.recordFailReason(queryObjectId,"query to view slot mapping null");
                     continue;
                 }
                 LogicalCompatibilityContext compatibilityContext =
                         LogicalCompatibilityContext.from(queryToViewTableMapping, queryToViewSlotMapping,
-                                queryStructInfo, viewStructInfo);
+                                queryStructInfo, viewStructInfo, materializationContext);
                 ComparisonResult comparisonResult = StructInfo.isGraphLogicalEquals(queryStructInfo, viewStructInfo,
                         compatibilityContext);
                 if (comparisonResult.isInvalid()) {
-                    logger.debug(currentClassName + " graph logical is not equals so continue");
                     continue;
                 }
                 // TODO: Use set of list? And consider view expr
@@ -152,7 +155,9 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                         queryToViewSlotMapping);
                 // Can not compensate, bail out
                 if (compensatePredicates.isEmpty()) {
-                    logger.debug(currentClassName + " predicate compensate fail so continue");
+                    materializationContext.recordFailReason(queryObjectId,"predicate compensate fail,"
+                            + "query predicates = " + queryStructInfo.getPredicates() + ","
+                            + "view predicates = " + viewStructInfo.getPredicates());
                     continue;
                 }
                 Plan rewrittenPlan;
@@ -168,7 +173,10 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                             queryToViewSlotMapping,
                             true);
                     if (rewriteCompensatePredicates.isEmpty()) {
-                        logger.debug(currentClassName + " compensate predicate rewrite by view fail so continue");
+                        materializationContext.recordFailReason(queryObjectId,"rewrite compensate predicate fail,"
+                                + "compensatePredicates = " + compensatePredicates + ","
+                                + "mvExprToMvScanExprMapping = "
+                                + materializationContext.getMvExprToMvScanExprMapping());
                         continue;
                     }
                     rewrittenPlan = new LogicalFilter<>(Sets.newHashSet(rewriteCompensatePredicates), mvScan);
@@ -181,15 +189,14 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                         rewrittenPlan,
                         materializationContext);
                 if (rewrittenPlan == null) {
-                    logger.debug(currentClassName + " rewrite query by view fail so continue");
+                    materializationContext.recordFailReason(queryObjectId,"rewrite query by view fail");
                     continue;
                 }
                 if (!checkPartitionIsValid(queryStructInfo, materializationContext, cascadesContext)) {
-                    logger.debug(currentClassName + " check partition validation fail so continue");
+                    materializationContext.recordFailReason(queryObjectId,"check partition validation fail");
                     continue;
                 }
-                if (!checkOutput(queryPlan, rewrittenPlan)) {
-                    logger.debug(currentClassName + " check output validation fail so continue");
+                if (!checkOutput(queryPlan, rewrittenPlan, materializationContext)) {
                     continue;
                 }
                 // run rbo job on mv rewritten plan
@@ -198,16 +205,23 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                                 cascadesContext.getCurrentJobContext().getRequiredProperties());
                 Rewriter.getWholeTreeRewriter(rewrittenPlanContext).execute();
                 rewrittenPlan = rewrittenPlanContext.getRewritePlan();
-                logger.debug(currentClassName + "rewrite by materialized view success");
+                materializationContext.setSuccess(true);
                 rewriteResults.add(rewrittenPlan);
             }
         }
         return rewriteResults;
     }
 
-    protected boolean checkOutput(Plan sourcePlan, Plan rewrittenPlan) {
+    protected boolean checkOutput(Plan sourcePlan, Plan rewrittenPlan, MaterializationContext materializationContext) {
         if (sourcePlan.getGroupExpression().isPresent() && !rewrittenPlan.getLogicalProperties().equals(
                 sourcePlan.getGroupExpression().get().getOwnerGroup().getLogicalProperties())) {
+            ObjectId queryObjectId = sourcePlan.getGroupExpression()
+                    .map(GroupExpression::getId).orElseGet(() -> new ObjectId(-1));
+            materializationContext.recordFailReason(queryObjectId,
+                    "rewrittenPlan output logical properties is not same with target group, "
+                            + "planOutput: " + rewrittenPlan.getLogicalProperties() + "," +
+                            "groupOutput: " + sourcePlan.getGroupExpression().get()
+                            .getOwnerGroup().getLogicalProperties());
             logger.error("rewrittenPlan output logical properties is not same with target group");
             return false;
         }

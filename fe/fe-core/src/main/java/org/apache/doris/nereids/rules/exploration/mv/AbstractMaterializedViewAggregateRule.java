@@ -22,6 +22,7 @@ import org.apache.doris.nereids.jobs.joinorder.hypergraph.HyperGraph;
 import org.apache.doris.nereids.jobs.joinorder.hypergraph.edge.JoinEdge;
 import org.apache.doris.nereids.jobs.joinorder.hypergraph.node.AbstractNode;
 import org.apache.doris.nereids.jobs.joinorder.hypergraph.node.StructInfoNode;
+import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.rules.exploration.mv.StructInfo.PlanSplitContext;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.ExpressionMapping;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.SlotMapping;
@@ -35,10 +36,13 @@ import org.apache.doris.nereids.trees.expressions.functions.agg.AggregateFunctio
 import org.apache.doris.nereids.trees.expressions.functions.agg.BitmapUnion;
 import org.apache.doris.nereids.trees.expressions.functions.agg.CouldRollUp;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Count;
+import org.apache.doris.nereids.trees.plans.AbstractPlan;
+import org.apache.doris.nereids.trees.plans.ObjectId;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalAggregate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.util.ExpressionUtils;
+import org.apache.doris.planner.PlanNodeId;
 
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Multimap;
@@ -80,12 +84,17 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
             MaterializationContext materializationContext) {
         // get view and query aggregate and top plan correspondingly
         Pair<Plan, LogicalAggregate<Plan>> viewTopPlanAndAggPair = splitToTopPlanAndAggregate(viewStructInfo);
+        ObjectId queryObjectId = queryStructInfo.getOriginalPlan().getGroupExpression()
+                .map(GroupExpression::getId).orElseGet(() -> new ObjectId(-1));
         if (viewTopPlanAndAggPair == null) {
+            materializationContext.recordFailReason(queryObjectId, "split to view to top plan and agg fail");
             logger.warn(currentClassName + " split to view to top plan and agg fail so return null");
             return null;
         }
         Pair<Plan, LogicalAggregate<Plan>> queryTopPlanAndAggPair = splitToTopPlanAndAggregate(queryStructInfo);
         if (queryTopPlanAndAggPair == null) {
+            materializationContext.recordFailReason(queryObjectId,
+                    "split to query to top plan and agg fail so return null");
             logger.warn(currentClassName + " split to query to top plan and agg fail so return null");
             return null;
         }
@@ -115,7 +124,8 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                     true);
             if (rewrittenQueryGroupExpr.isEmpty()) {
                 // can not rewrite, bail out.
-                logger.debug(currentClassName + " can not rewrite expression when not need roll up");
+                materializationContext.recordFailReason(queryObjectId,
+                        "can not rewrite expression when not need roll up");
                 return null;
             }
             return new LogicalProject<>(
@@ -130,13 +140,16 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                 viewExpr -> viewExpr.anyMatch(expr -> expr instanceof AggregateFunction
                         && ((AggregateFunction) expr).isDistinct()))) {
             // if mv aggregate function contains distinct, can not roll up, bail out.
-            logger.debug(currentClassName + " view contains distinct function so can not roll up");
+            materializationContext.recordFailReason(queryObjectId,
+                    "view contains distinct function so can not roll up");
             return null;
         }
         // split the query top plan expressions to group expressions and functions, if can not, bail out.
         Pair<Set<? extends Expression>, Set<? extends Expression>> queryGroupAndFunctionPair
                 = topPlanSplitToGroupAndFunction(queryTopPlanAndAggPair);
         if (queryGroupAndFunctionPair == null) {
+            materializationContext.recordFailReason(queryObjectId,
+                    "query top plan split to group by and function fail");
             logger.warn(currentClassName + " query top plan split to group by and function fail so return null");
             return null;
         }
@@ -175,7 +188,8 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                         queryToViewSlotMapping,
                         false);
                 if (rewrittenFunctionExpression == null) {
-                    logger.debug(currentClassName + " roll up expression can not rewrite by view so return null");
+                    materializationContext.recordFailReason(queryObjectId,
+                            "roll up expression can not rewrite by view");
                     return null;
                 }
                 finalAggregateExpressions.add((NamedExpression) rewrittenFunctionExpression);
@@ -185,8 +199,8 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                         ExpressionUtils.shuttleExpressionWithLineage(topExpression, queryTopPlan);
                 if (!mvExprToMvScanExprQueryBased.containsKey(queryGroupShuttledExpr)) {
                     // group expr can not rewrite by view
-                    logger.debug(currentClassName
-                            + " view group expressions can not contains the query group by expression so return null");
+                    materializationContext.recordFailReason(queryObjectId,
+                            "view group expressions doesn't not contains the query group by expression");
                     return null;
                 }
                 groupRewrittenExprMap.put(queryGroupShuttledExpr,
@@ -199,8 +213,8 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                         queryToViewSlotMapping,
                         true);
                 if (rewrittenGroupExpression == null) {
-                    logger.debug(currentClassName
-                            + " query top expression can not be rewritten by view so return null");
+                    materializationContext.recordFailReason(queryObjectId,
+                            "query top group expression can not be rewritten by view");
                     return null;
                 }
                 finalAggregateExpressions.add((NamedExpression) rewrittenGroupExpression);
