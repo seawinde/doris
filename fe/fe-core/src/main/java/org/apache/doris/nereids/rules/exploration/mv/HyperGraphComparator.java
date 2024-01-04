@@ -27,6 +27,7 @@ import org.apache.doris.nereids.rules.rewrite.PushDownFilterThroughJoin;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.plans.JoinType;
+import org.apache.doris.nereids.util.ExpressionUtils;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -41,6 +42,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * HyperGraphComparator
@@ -108,16 +110,22 @@ public class HyperGraphComparator {
     private ComparisonResult buildComparisonRes() {
         ComparisonResult.Builder builder = new ComparisonResult.Builder();
         for (Entry<Edge, List<? extends Expression>> e : pullUpQueryExprWithEdge.entrySet()) {
-            if (!e.getValue().isEmpty() && !canPullUp(e.getKey())) {
+            List<? extends Expression> rawFilter = e.getValue().stream()
+                    .filter(expr -> !ExpressionUtils.isInferred(expr))
+                    .collect(Collectors.toList());
+            if (!rawFilter.isEmpty() && !canPullUp(e.getKey())) {
                 return ComparisonResult.newInvalidResWithErrorMessage(getErrorMessage() + "\nwith error edge " + e);
             }
-            builder.addQueryExpressions(e.getValue());
+            builder.addQueryExpressions(rawFilter);
         }
         for (Entry<Edge, List<? extends Expression>> e : pullUpViewExprWithEdge.entrySet()) {
-            if (!e.getValue().isEmpty() && !canPullUp(e.getKey())) {
-                return ComparisonResult.newInvalidResWithErrorMessage(getErrorMessage() + "\nwith error edge " + e);
+            List<? extends Expression> rawFilter = e.getValue().stream()
+                    .filter(expr -> !ExpressionUtils.isInferred(expr))
+                    .collect(Collectors.toList());
+            if (!rawFilter.isEmpty() && !canPullUp(e.getKey())) {
+                return ComparisonResult.newInvalidResWithErrorMessage(getErrorMessage() + "with error edge\n" + e);
             }
-            builder.addViewExpressions(e.getValue());
+            builder.addViewExpressions(rawFilter);
         }
         for (Pair<JoinType, Set<Slot>> inferredCond : inferredViewEdgeMap.values()) {
             builder.addViewNoNullableSlot(inferredCond.second);
@@ -130,11 +138,12 @@ public class HyperGraphComparator {
      */
     public String getErrorMessage() {
         return String.format(
-                "graph logical is not equal, query join edges is %s,\n" + "query filter edges is %s,\n"
-                        + "view join edges is %s,\n" + "view filter edges is %s\n" + "inferred edge with conds %s",
+                "graph logical is not equal\n query join edges is\n %s,\n view join edges is\n %s,\n"
+                        + "query filter edges\n is %s,\nview filter edges\n is %s\n"
+                        + "inferred edge with conditions\n %s",
                 getQueryJoinEdges(),
-                getQueryFilterEdges(),
                 getViewJoinEdges(),
+                getQueryFilterEdges(),
                 getViewFilterEdges(),
                 inferredViewEdgeMap);
     }
