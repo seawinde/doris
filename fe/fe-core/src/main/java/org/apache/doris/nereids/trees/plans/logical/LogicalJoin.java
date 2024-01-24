@@ -18,7 +18,6 @@
 package org.apache.doris.nereids.trees.plans.logical;
 
 import org.apache.doris.common.Pair;
-import org.apache.doris.nereids.hint.DistributeHint;
 import org.apache.doris.nereids.jobs.joinorder.hypergraph.bitmap.LongBitmap;
 import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.properties.FunctionalDependencies;
@@ -31,7 +30,7 @@ import org.apache.doris.nereids.trees.expressions.ExprId;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.MarkJoinSlotReference;
 import org.apache.doris.nereids.trees.expressions.Slot;
-import org.apache.doris.nereids.trees.plans.DistributeType;
+import org.apache.doris.nereids.trees.plans.JoinHint;
 import org.apache.doris.nereids.trees.plans.JoinType;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.PlanType;
@@ -76,30 +75,30 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
     // Table bitmap for tables below this join
     private long bitmap = LongBitmap.newBitmap();
 
-    private DistributeHint hint;
+    private JoinHint hint;
 
     public LogicalJoin(JoinType joinType, LEFT_CHILD_TYPE leftChild, RIGHT_CHILD_TYPE rightChild) {
         this(joinType, ExpressionUtils.EMPTY_CONDITION, ExpressionUtils.EMPTY_CONDITION,
-                new DistributeHint(DistributeType.NONE),
+                JoinHint.NONE,
                 Optional.empty(), Optional.empty(), Optional.empty(), leftChild, rightChild);
     }
 
     public LogicalJoin(JoinType joinType, List<Expression> hashJoinConjuncts, LEFT_CHILD_TYPE leftChild,
             RIGHT_CHILD_TYPE rightChild) {
         this(joinType, hashJoinConjuncts, ExpressionUtils.EMPTY_CONDITION,
-                new DistributeHint(DistributeType.NONE), Optional.empty(),
+                JoinHint.NONE, Optional.empty(),
                 Optional.empty(), Optional.empty(), leftChild, rightChild);
     }
 
     public LogicalJoin(JoinType joinType, List<Expression> hashJoinConjuncts, List<Expression> otherJoinConjuncts,
             LEFT_CHILD_TYPE leftChild, RIGHT_CHILD_TYPE rightChild) {
         this(joinType, hashJoinConjuncts, otherJoinConjuncts,
-                new DistributeHint(DistributeType.NONE), Optional.empty(),
+                JoinHint.NONE, Optional.empty(),
                 Optional.empty(), Optional.empty(), leftChild, rightChild);
     }
 
     public LogicalJoin(JoinType joinType, List<Expression> hashJoinConjuncts, List<Expression> otherJoinConjuncts,
-            DistributeHint hint, LEFT_CHILD_TYPE leftChild, RIGHT_CHILD_TYPE rightChild) {
+            JoinHint hint, LEFT_CHILD_TYPE leftChild, RIGHT_CHILD_TYPE rightChild) {
         this(joinType, hashJoinConjuncts, otherJoinConjuncts, hint, Optional.empty(), Optional.empty(),
                 Optional.empty(), leftChild, rightChild);
     }
@@ -108,7 +107,7 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
             JoinType joinType,
             List<Expression> hashJoinConjuncts,
             List<Expression> otherJoinConjuncts,
-            DistributeHint hint,
+            JoinHint hint,
             Optional<MarkJoinSlotReference> markJoinSlotReference,
             LEFT_CHILD_TYPE leftChild, RIGHT_CHILD_TYPE rightChild) {
         this(joinType, hashJoinConjuncts,
@@ -121,7 +120,7 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
             JoinType joinType,
             List<Expression> hashJoinConjuncts,
             List<Expression> otherJoinConjuncts,
-            DistributeHint hint,
+            JoinHint hint,
             Optional<MarkJoinSlotReference> markJoinSlotReference,
             LEFT_CHILD_TYPE leftChild, RIGHT_CHILD_TYPE rightChild) {
         this(joinType, hashJoinConjuncts,
@@ -134,7 +133,7 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
             JoinType joinType,
             List<Expression> hashJoinConjuncts,
             List<Expression> otherJoinConjuncts,
-            DistributeHint hint,
+            JoinHint hint,
             Optional<MarkJoinSlotReference> markJoinSlotReference,
             List<Plan> children) {
         this(joinType, hashJoinConjuncts,
@@ -143,7 +142,7 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
     }
 
     private LogicalJoin(JoinType joinType, List<Expression> hashJoinConjuncts, List<Expression> otherJoinConjuncts,
-            DistributeHint hint, Optional<MarkJoinSlotReference> markJoinSlotReference,
+            JoinHint hint, Optional<MarkJoinSlotReference> markJoinSlotReference,
             Optional<GroupExpression> groupExpression, Optional<LogicalProperties> logicalProperties,
             List<Plan> children, JoinReorderContext joinReorderContext) {
         // Just use in withXXX method. Don't need check/copyOf()
@@ -160,7 +159,7 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
             JoinType joinType,
             List<Expression> hashJoinConjuncts,
             List<Expression> otherJoinConjuncts,
-            DistributeHint hint,
+            JoinHint hint,
             Optional<MarkJoinSlotReference> markJoinSlotReference,
             Optional<GroupExpression> groupExpression,
             Optional<LogicalProperties> logicalProperties,
@@ -178,7 +177,7 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
             JoinType joinType,
             List<Expression> hashJoinConjuncts,
             List<Expression> otherJoinConjuncts,
-            DistributeHint hint,
+            JoinHint hint,
             Optional<MarkJoinSlotReference> markJoinSlotReference,
             Optional<GroupExpression> groupExpression,
             Optional<LogicalProperties> logicalProperties,
@@ -194,6 +193,11 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
     public LogicalJoin<? extends Plan, ? extends Plan> swap() {
         return withTypeChildren(getJoinType().swap(),
                 right(), left());
+    }
+
+    @Override
+    public JoinHint getHint() {
+        return hint;
     }
 
     public List<Expression> getOtherJoinConjuncts() {
@@ -230,11 +234,11 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
         return joinType;
     }
 
-    public DistributeHint getDistributeHint() {
+    public JoinHint getDistributeHint() {
         return hint;
     }
 
-    public void setHint(DistributeHint hint) {
+    public void setHint(JoinHint hint) {
         this.hint = hint;
     }
 
@@ -262,10 +266,6 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
                 "markJoinSlotReference", markJoinSlotReference,
                 "hashJoinConjuncts", hashJoinConjuncts,
                 "otherJoinConjuncts", otherJoinConjuncts);
-        if (hint.distributeType != DistributeType.NONE) {
-            args.add("hint");
-            args.add(hint.getExplainString());
-        }
         return Utils.toSqlString("LogicalJoin[" + id.asInt() + "]", args.toArray());
     }
 
@@ -410,7 +410,7 @@ public class LogicalJoin<LEFT_CHILD_TYPE extends Plan, RIGHT_CHILD_TYPE extends 
 
     @Override
     public FunctionalDependencies computeFuncDeps(Supplier<List<Slot>> outputSupplier) {
-        //1. NALAJ and FOJ block functional dependencies
+        // 1. NALAJ and FOJ block functional dependencies
         if (joinType.isNullAwareLeftAntiJoin() || joinType.isFullOuterJoin()) {
             return FunctionalDependencies.EMPTY_FUNC_DEPS;
         }
