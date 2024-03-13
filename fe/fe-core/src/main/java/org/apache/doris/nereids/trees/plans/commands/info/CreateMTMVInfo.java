@@ -30,7 +30,6 @@ import org.apache.doris.catalog.KeysType;
 import org.apache.doris.catalog.PartitionType;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.TableIf.TableType;
-import org.apache.doris.catalog.View;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.FeNameFormat;
@@ -62,7 +61,6 @@ import org.apache.doris.nereids.trees.plans.algebra.OneRowRelation;
 import org.apache.doris.nereids.trees.plans.commands.ExplainCommand.ExplainLevel;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalSink;
-import org.apache.doris.nereids.trees.plans.logical.LogicalSubQueryAlias;
 import org.apache.doris.nereids.trees.plans.visitor.NondeterministicFunctionCollector;
 import org.apache.doris.nereids.trees.plans.visitor.TableCollector;
 import org.apache.doris.nereids.trees.plans.visitor.TableCollector.TableCollectorContext;
@@ -325,23 +323,6 @@ public class CreateMTMVInfo {
         List<TableIf> collectedTables = collectorContext.getCollectedTables();
         if (!CollectionUtils.isEmpty(collectedTables)) {
             throw new AnalysisException("can not contain MATERIALIZED_VIEW");
-        }
-
-        List<Object> subQuerys = plan.collectToList(node -> node instanceof LogicalSubQueryAlias);
-        for (Object subquery : subQuerys) {
-            List<String> qualifier = ((LogicalSubQueryAlias) subquery).getQualifier();
-            if (!CollectionUtils.isEmpty(qualifier) && qualifier.size() == 3) {
-                try {
-                    TableIf table = Env.getCurrentEnv().getCatalogMgr()
-                            .getCatalogOrAnalysisException(qualifier.get(0))
-                            .getDbOrAnalysisException(qualifier.get(1)).getTableOrAnalysisException(qualifier.get(2));
-                    if (table instanceof View) {
-                        throw new AnalysisException("can not contain VIEW");
-                    }
-                } catch (org.apache.doris.common.AnalysisException e) {
-                    LOG.warn("can not get table, ", e);
-                }
-            }
         }
     }
 
