@@ -21,8 +21,6 @@ import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.jobs.joinorder.hypergraph.HyperGraph;
 import org.apache.doris.nereids.jobs.joinorder.hypergraph.node.StructInfoNode;
 import org.apache.doris.nereids.rules.RuleSet;
-import org.apache.doris.nereids.rules.exploration.mv.mapping.RelationMapping;
-import org.apache.doris.nereids.rules.exploration.mv.mapping.SlotMapping;
 import org.apache.doris.nereids.sqltest.SqlTestBase;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.util.PlanChecker;
@@ -81,18 +79,8 @@ class HyperGraphAggTest extends SqlTestBase {
                 .getAllPlan().get(0).child(0);
         HyperGraph h1 = HyperGraph.builderForMv(p1).buildAll().get(0);
         HyperGraph h2 = HyperGraph.builderForMv(p2).buildAll().get(0);
-        ComparisonResult res = HyperGraphComparator.isLogicCompatible(h1, h2, constructContext(p1, p2));
+        ComparisonResult res = HyperGraphComparator.isLogicCompatible(h1, h2, constructContext(p1, p2, c1));
         Assertions.assertTrue(!res.isInvalid());
         Assertions.assertEquals(2, res.getViewNoNullableSlot().size());
-    }
-
-    LogicalCompatibilityContext constructContext(Plan p1, Plan p2) {
-        StructInfo st1 = MaterializedViewUtils.extractStructInfo(p1,
-                null).get(0);
-        StructInfo st2 = MaterializedViewUtils.extractStructInfo(p2,
-                null).get(0);
-        RelationMapping rm = RelationMapping.generate(st1.getRelations(), st2.getRelations()).get(0);
-        SlotMapping sm = SlotMapping.generate(rm);
-        return LogicalCompatibilityContext.from(rm, sm, st1, st2);
     }
 }

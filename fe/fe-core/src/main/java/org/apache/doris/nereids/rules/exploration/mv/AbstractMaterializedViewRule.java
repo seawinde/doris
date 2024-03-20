@@ -189,7 +189,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 continue;
             }
             LogicalCompatibilityContext compatibilityContext = LogicalCompatibilityContext.from(
-                    queryToViewTableMapping, queryToViewSlotMapping, queryStructInfo, viewStructInfo);
+                    queryToViewTableMapping, queryToViewSlotMapping, queryStructInfo, viewStructInfo, cascadesContext);
             ComparisonResult comparisonResult = StructInfo.isGraphLogicalEquals(queryStructInfo, viewStructInfo,
                     compatibilityContext);
             if (comparisonResult.isInvalid()) {
@@ -199,7 +199,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 continue;
             }
             SplitPredicate compensatePredicates = predicatesCompensate(queryStructInfo, viewStructInfo,
-                    viewToQuerySlotMapping, comparisonResult, cascadesContext);
+                    viewToQuerySlotMapping, comparisonResult, compatibilityContext);
             // Can not compensate, bail out
             if (compensatePredicates.isInvalid()) {
                 materializationContext.recordFailReason(queryStructInfo,
@@ -459,7 +459,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             StructInfo viewStructInfo,
             SlotMapping viewToQuerySlotMapping,
             ComparisonResult comparisonResult,
-            CascadesContext cascadesContext
+            LogicalCompatibilityContext context
     ) {
         // TODO: Use set of list? And consider view expr
         List<Expression> queryPulledUpExpressions = ImmutableList.copyOf(comparisonResult.getQueryExpressions());
@@ -482,12 +482,17 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             SlotMapping queryToViewMapping = viewToQuerySlotMapping.inverse();
             // try to use
             boolean valid = containsNullRejectSlot(requireNoNullableViewSlot,
-                    queryStructInfo.getPredicates().getPulledUpPredicates(), queryToViewMapping, cascadesContext);
+                    queryStructInfo.getPredicates().getPulledUpPredicates(), queryToViewMapping,
+                    context.getCascadesContext());
             if (!valid) {
                 queryStructInfo = queryStructInfo.withPredicates(
-                        queryStructInfo.getPredicates().merge(comparisonResult.getQueryAllPulledUpExpressions()));
+                        queryStructInfo.getPredicates().merge(
+                                comparisonResult.getQueryAllPulledUpExpressions().stream()
+                                        .filter(expr -> !expr.isInferred())
+                                        .collect(Collectors.toSet())));
                 valid = containsNullRejectSlot(requireNoNullableViewSlot,
-                        queryStructInfo.getPredicates().getPulledUpPredicates(), queryToViewMapping, cascadesContext);
+                        queryStructInfo.getPredicates().getPulledUpPredicates(), queryToViewMapping,
+                        context.getCascadesContext());
             }
             if (!valid) {
                 return SplitPredicate.INVALID_INSTANCE;
@@ -506,7 +511,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 viewStructInfo,
                 viewToQuerySlotMapping,
                 comparisonResult,
-                cascadesContext);
+                context);
         // residual compensate
         final Set<Expression> residualCompensatePredicates = Predicates.compensateResidualPredicate(
                 queryStructInfo,

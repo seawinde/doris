@@ -148,7 +148,7 @@ public class Predicates {
             StructInfo viewStructInfo,
             SlotMapping viewToQuerySlotMapping,
             ComparisonResult comparisonResult,
-            CascadesContext cascadesContext) {
+            LogicalCompatibilityContext context) {
         SplitPredicate querySplitPredicate = queryStructInfo.getSplitPredicate();
         SplitPredicate viewSplitPredicate = viewStructInfo.getSplitPredicate();
 
@@ -168,8 +168,33 @@ public class Predicates {
         }
         // try to normalize the different expressions
         Set<Expression> normalizedExpressions =
-                normalizeExpression(ExpressionUtils.and(differentExpressions), cascadesContext);
+                normalizeExpression(ExpressionUtils.and(differentExpressions), context.getCascadesContext());
         if (!queryRangeSet.containsAll(normalizedExpressions)) {
+            // normalized expressions is not in query, can not compensate
+            return null;
+        }
+        return normalizedExpressions;
+    }
+
+    /** Try to compensate expression */
+    public static Set<Expression> tryCompensate(Expression queryExpression,
+            Expression viewExpression, LogicalCompatibilityContext context) {
+        Expression viewExpressionQueryBased = ExpressionUtils.replace(
+                viewExpression, context.getQueryToViewSlotMapping().inverse().toSlotReferenceMap());
+
+        Set<Expression> queryConjunctions = ExpressionUtils.extractConjunctionToSet(queryExpression);
+        Set<Expression> viewConjunctionsQueryBased = ExpressionUtils.extractConjunctionToSet(viewExpressionQueryBased);
+
+        Set<Expression> differentExpressions = new HashSet<>();
+        Sets.difference(queryConjunctions, viewConjunctionsQueryBased).copyInto(differentExpressions);
+        Sets.difference(viewConjunctionsQueryBased, queryConjunctions).copyInto(differentExpressions);
+        if (differentExpressions.isEmpty()) {
+            return differentExpressions;
+        }
+        // try to normalize the different expressions
+        Set<Expression> normalizedExpressions =
+                normalizeExpression(ExpressionUtils.and(differentExpressions), context.getCascadesContext());
+        if (!queryConjunctions.containsAll(normalizedExpressions)) {
             // normalized expressions is not in query, can not compensate
             return null;
         }

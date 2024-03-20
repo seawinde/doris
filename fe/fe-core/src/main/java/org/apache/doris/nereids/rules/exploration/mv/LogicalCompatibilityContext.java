@@ -17,6 +17,7 @@
 
 package org.apache.doris.nereids.rules.exploration.mv;
 
+import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.jobs.joinorder.hypergraph.node.StructInfoNode;
 import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.Mapping.MappedRelation;
@@ -46,19 +47,24 @@ public class LogicalCompatibilityContext {
     private final BiMap<Expression, Expression> queryToViewEdgeExpressionMapping;
     private final BiMap<Integer, Integer> queryToViewNodeIDMapping;
     private final ObjectId planNodeId;
+    private final SlotMapping queryToViewSlotMapping;
+    private final CascadesContext cascadesContext;
 
     /**
      * LogicalCompatibilityContext
      */
     public LogicalCompatibilityContext(BiMap<StructInfoNode, StructInfoNode> queryToViewNodeMapping,
             BiMap<Expression, Expression> queryToViewEdgeExpressionMapping,
-            StructInfo queryStructInfo) {
+            StructInfo queryStructInfo, SlotMapping queryToViewSlotMapping,
+            CascadesContext cascadesContext) {
         this.queryToViewNodeMapping = queryToViewNodeMapping;
         this.queryToViewEdgeExpressionMapping = queryToViewEdgeExpressionMapping;
         this.queryToViewNodeIDMapping = HashBiMap.create();
         this.planNodeId = queryStructInfo.getOriginalPlan().getGroupExpression()
                 .map(GroupExpression::getId).orElseGet(() -> new ObjectId(-1));
         queryToViewNodeMapping.forEach((k, v) -> queryToViewNodeIDMapping.put(k.getIndex(), v.getIndex()));
+        this.queryToViewSlotMapping = queryToViewSlotMapping;
+        this.cascadesContext = cascadesContext;
     }
 
     public BiMap<StructInfoNode, StructInfoNode> getQueryToViewNodeMapping() {
@@ -77,6 +83,14 @@ public class LogicalCompatibilityContext {
         return planNodeId;
     }
 
+    public SlotMapping getQueryToViewSlotMapping() {
+        return queryToViewSlotMapping;
+    }
+
+    public CascadesContext getCascadesContext() {
+        return cascadesContext;
+    }
+
     /**
      * Generate logical compatibility context,
      * this make expression mapping between query and view by relation and the slot in relation mapping
@@ -84,7 +98,8 @@ public class LogicalCompatibilityContext {
     public static LogicalCompatibilityContext from(RelationMapping relationMapping,
             SlotMapping queryToViewSlotMapping,
             StructInfo queryStructInfo,
-            StructInfo viewStructInfo) {
+            StructInfo viewStructInfo,
+            CascadesContext cascadesContext) {
         // init node mapping
         BiMap<StructInfoNode, StructInfoNode> queryToViewNodeMapping = HashBiMap.create();
         Map<RelationId, StructInfoNode> queryRelationIdStructInfoNodeMap
@@ -121,7 +136,8 @@ public class LogicalCompatibilityContext {
                 queryToViewEdgeMapping.put(edge, viewExpr);
             }
         });
-        return new LogicalCompatibilityContext(queryToViewNodeMapping, queryToViewEdgeMapping, queryStructInfo);
+        return new LogicalCompatibilityContext(queryToViewNodeMapping,
+                queryToViewEdgeMapping, queryStructInfo, queryToViewSlotMapping, cascadesContext);
     }
 
     private static Expression orderSlotAsc(Expression expression) {

@@ -17,7 +17,14 @@
 
 package org.apache.doris.nereids.sqltest;
 
+import org.apache.doris.nereids.CascadesContext;
+import org.apache.doris.nereids.rules.exploration.mv.LogicalCompatibilityContext;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewUtils;
+import org.apache.doris.nereids.rules.exploration.mv.StructInfo;
+import org.apache.doris.nereids.rules.exploration.mv.mapping.RelationMapping;
+import org.apache.doris.nereids.rules.exploration.mv.mapping.SlotMapping;
 import org.apache.doris.nereids.trees.expressions.StatementScopeIdGenerator;
+import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.util.MemoPatternMatchSupported;
 import org.apache.doris.utframe.TestWithFeService;
 
@@ -81,5 +88,15 @@ public abstract class SqlTestBase extends TestWithFeService implements MemoPatte
     @Override
     protected void runBeforeEach() throws Exception {
         StatementScopeIdGenerator.clear();
+    }
+
+    protected LogicalCompatibilityContext constructContext(Plan p1, Plan p2, CascadesContext context) {
+        StructInfo st1 = MaterializedViewUtils.extractStructInfo(p1,
+                null).get(0);
+        StructInfo st2 = MaterializedViewUtils.extractStructInfo(p2,
+                null).get(0);
+        RelationMapping rm = RelationMapping.generate(st1.getRelations(), st2.getRelations()).get(0);
+        SlotMapping sm = SlotMapping.generate(rm);
+        return LogicalCompatibilityContext.from(rm, sm, st1, st2, context);
     }
 }
