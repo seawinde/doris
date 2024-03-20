@@ -121,9 +121,7 @@ public class Memo {
     private Plan skipProject(Plan plan, Group targetGroup) {
         // Some top project can't be eliminated, reserve project if the child of project is GroupPlan
         // because method doCopyIn will fail if the eliminated plan is a pure GroupPlan.
-        if (plan instanceof LogicalProject
-                && ((LogicalProject<?>) plan).canEliminate()
-                && !(((LogicalProject<?>) plan).child() instanceof GroupPlan)) {
+        if (plan instanceof LogicalProject && ((LogicalProject<?>) plan).canEliminate()) {
             LogicalProject<?> logicalProject = (LogicalProject<?>) plan;
             if (targetGroup != root) {
                 if (logicalProject.getOutputSet().equals(logicalProject.child().getOutputSet())) {
