@@ -863,11 +863,6 @@ under the License.
             </dependency>
             <dependency>
                 <groupId>io.netty</groupId>
-                <artifactId>netty-transport-sctp</artifactId>
-                <version>${netty-all.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.netty</groupId>
                 <artifactId>netty-transport-classes-kqueue</artifactId>
                 <version>${netty-all.version}</version>
             </dependency>
