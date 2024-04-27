@@ -136,6 +136,8 @@ public class SessionVariable implements Serializable, Writable {
     public static final String ENABLE_REWRITE_ELEMENT_AT_TO_SLOT = "enable_rewrite_element_at_to_slot";
     public static final String ENABLE_ODBC_TRANSCATION = "enable_odbc_transcation";
     public static final String ENABLE_SQL_CACHE = "enable_sql_cache";
+
+    public static final String ENABLE_PLAN_CACHE = "enable_plan_cache";
     public static final String ENABLE_PARTITION_CACHE = "enable_partition_cache";
 
     public static final String ENABLE_COST_BASED_JOIN_REORDER = "enable_cost_based_join_reorder";
@@ -831,6 +833,9 @@ public class SessionVariable implements Serializable, Writable {
 
     @VariableMgr.VarAttr(name = ENABLE_SQL_CACHE)
     public boolean enableSqlCache = false;
+
+    @VariableMgr.VarAttr(name = ENABLE_PLAN_CACHE)
+    public boolean enablePlanCache = false;
 
     @VariableMgr.VarAttr(name = ENABLE_PARTITION_CACHE)
     public boolean enablePartitionCache = false;
@@ -2385,6 +2390,14 @@ public class SessionVariable implements Serializable, Writable {
 
     public void setEnableSqlCache(boolean enableSqlCache) {
         this.enableSqlCache = enableSqlCache;
+    }
+
+    public boolean isEnablePlanCache() {
+        return enablePlanCache;
+    }
+
+    public void setEnablePlanCache(boolean enablePlanCache) {
+        this.enablePlanCache = enablePlanCache;
     }
 
     public boolean isEnablePartitionCache() {

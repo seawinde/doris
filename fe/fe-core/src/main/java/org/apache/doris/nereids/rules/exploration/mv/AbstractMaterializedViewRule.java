@@ -107,8 +107,23 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             if (checkIfRewritten(queryPlan, context)) {
                 continue;
             }
-            // check mv plan is valid or not
-            if (!checkPattern(context.getStructInfo())) {
+            // check mv plan is valid or not, this can use cache
+            Boolean cachedCheckResult = cascadesContext.getMemo().materializationHasChecked(
+                    this.getClass(), context.getMTMV().getId());
+            if (cachedCheckResult == null) {
+                boolean checkResult = checkPattern(context.getStructInfo());
+                if (!checkResult) {
+                    context.recordFailReason(context.getStructInfo(),
+                            "View struct info is invalid", () -> String.format(", view plan is %s",
+                                    context.getStructInfo().getOriginalPlan().treeString()));
+                    cascadesContext.getMemo().recordMaterializationContext(this.getClass(),
+                            context.getMTMV().getId(), false);
+                    continue;
+                } else {
+                    cascadesContext.getMemo().recordMaterializationContext(this.getClass(),
+                            context.getMTMV().getId(), true);
+                }
+            } else if (!cachedCheckResult) {
                 context.recordFailReason(context.getStructInfo(),
                         "View struct info is invalid", () -> String.format(", view plan is %s",
                                 context.getStructInfo().getOriginalPlan().treeString()));
