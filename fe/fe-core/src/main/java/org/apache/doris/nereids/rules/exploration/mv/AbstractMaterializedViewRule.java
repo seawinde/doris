@@ -107,6 +107,10 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             if (checkIfRewritten(queryPlan, context)) {
                 continue;
             }
+            // the mv which query directly doesn't need to rewrite
+            if (cascadesContext.getTables().stream().anyMatch(table -> table.getId() == context.getMTMV().getId())) {
+                continue;
+            }
             // check mv plan is valid or not, this can use cache
             Boolean cachedCheckResult = cascadesContext.getMemo().materializationHasChecked(
                     this.getClass(), context.getMTMV().getId());
@@ -136,12 +140,6 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 continue;
             }
             for (StructInfo queryStructInfo : queryStructInfos) {
-                if (queryStructInfo.getRelations().size() == 1 && context.getStructInfo().getRelations().size() == 1) {
-                    // query self should not rewrite
-                    if (queryStructInfo.getRelations().get(0).getTable().getId() == context.getMTMV().getId()) {
-                        continue;
-                    }
-                }
                 try {
                     if (rewrittenPlans.size() < cascadesContext.getConnectContext()
                             .getSessionVariable().getMaterializedViewRewriteSuccessCandidateNum()) {
