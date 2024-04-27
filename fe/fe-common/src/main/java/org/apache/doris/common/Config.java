@@ -2805,6 +2805,9 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true)
     public static boolean enable_cloud_running_txn_check = true;
+
+    @ConfField(mutable = true)
+    public static int plan_cache_number = 3000;
     //==========================================================================
     //                      end of cloud config
     //==========================================================================

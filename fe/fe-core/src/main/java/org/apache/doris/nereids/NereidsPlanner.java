@@ -53,6 +53,7 @@ import org.apache.doris.nereids.trees.expressions.literal.Literal;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.commands.ExplainCommand.ExplainLevel;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
+import org.apache.doris.nereids.trees.plans.logical.LogicalSink;
 import org.apache.doris.nereids.trees.plans.logical.LogicalSqlCache;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalCatalogRelation;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalEmptyRelation;
@@ -66,6 +67,7 @@ import org.apache.doris.planner.RuntimeFilter;
 import org.apache.doris.planner.ScanNode;
 import org.apache.doris.qe.CommonResultSet;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.OriginStatement;
 import org.apache.doris.qe.ResultSet;
 import org.apache.doris.qe.ResultSetMetaData;
 import org.apache.doris.qe.cache.CacheAnalyzer;
@@ -194,6 +196,17 @@ public class NereidsPlanner extends Planner {
                 // resolve column, table and function
                 // analyze this query
                 analyze(showAnalyzeProcess(explainLevel, showPlanProcess));
+                Integer planCacheKey = generateSqlCacheKey(statementContext);
+                if (!cascadesContext.getConnectContext().getSessionVariable().isEnablePlanCache()
+                        && !cascadesContext.getConnectContext().getPlanCache().isEmpty()) {
+                    cascadesContext.getConnectContext().getPlanCache().clear();
+                }
+                if (planCacheKey != null && idNeedPlanCache(cascadesContext, statementContext)) {
+                    Plan cachedPlan = cascadesContext.getConnectContext().getPlanCache().get(planCacheKey);
+                    if (cachedPlan != null) {
+                        return cachedPlan;
+                    }
+                }
                 // minidump of input must be serialized first, this process ensure minidump string not null
                 try {
                     MinidumpUtils.serializeInputsToDumpFile(plan, cascadesContext.getTables());
@@ -242,6 +255,10 @@ public class NereidsPlanner extends Planner {
                 PhysicalPlan physicalPlan = chooseNthPlan(getRoot(), requireProperties, nth);
 
                 physicalPlan = postProcess(physicalPlan);
+                // cache plan
+                if (planCacheKey != null && idNeedPlanCache(cascadesContext, statementContext)) {
+                    cascadesContext.getConnectContext().addToPlanCache(planCacheKey, physicalPlan);
+                }
                 if (cascadesContext.getConnectContext().getSessionVariable().dumpNereidsMemo) {
                     String tree = physicalPlan.treeString();
                     LOG.info(ConnectContext.get().getQueryIdentifier() + "\n" + tree);
@@ -260,6 +277,37 @@ public class NereidsPlanner extends Planner {
         } finally {
             statementContext.releasePlannerResources();
         }
+    }
+
+    private boolean idNeedPlanCache(CascadesContext cascadesContext, StatementContext statementContext) {
+        boolean enablePlanCache = cascadesContext.getConnectContext().getSessionVariable().isEnablePlanCache();
+        boolean query = cascadesContext.getConnectContext().getState().isQuery();
+        boolean isStatementQuery = statementContext.getParsedStatement() instanceof LogicalPlanAdapter
+                && ((LogicalPlanAdapter) statementContext.getParsedStatement()).getLogicalPlan() instanceof LogicalSink;
+        return enablePlanCache && query && isStatementQuery;
+    }
+
+    private Integer generateSqlCacheKey(StatementContext statementContext) {
+        OriginStatement originStatement = statementContext.getOriginStatement();
+        if (originStatement == null) {
+            return null;
+        }
+        String sql = removeWhitespace(originStatement.toString());
+        return sql == null ? null : sql.hashCode();
+    }
+
+    private static String removeWhitespace(String input) {
+        if (input == null) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder(input.length());
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (!Character.isWhitespace(c)) {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     private LogicalPlan preprocess(LogicalPlan logicalPlan) {
