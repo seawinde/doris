@@ -34,6 +34,7 @@ import org.apache.doris.catalog.FunctionRegistry;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.cluster.ClusterNamespace;
+import org.apache.doris.common.ConcurrentCommonCache;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.util.DebugUtil;
 import org.apache.doris.common.util.TimeUtils;
@@ -49,6 +50,7 @@ import org.apache.doris.mysql.ProxyMysqlChannel;
 import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.stats.StatsErrorEstimator;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
+import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.plsql.Exec;
 import org.apache.doris.plsql.executor.PlSqlOperation;
 import org.apache.doris.plugin.audit.AuditEvent.AuditEventBuilder;
@@ -232,6 +234,20 @@ public class ConnectContext {
     private boolean skipAuth = false;
     private Exec exec;
     private boolean runProcedure = false;
+
+    private ConcurrentCommonCache<Integer, Plan> planCache = new ConcurrentCommonCache<>(Config.plan_cache_number);
+
+    public Plan getFromPlanCache(Integer key) {
+        return planCache.get(key);
+    }
+
+    public void addToPlanCache(Integer key, Plan plan) {
+        planCache.put(key, plan);
+    }
+
+    public ConcurrentCommonCache<Integer, Plan> getPlanCache() {
+        return planCache;
+    }
 
     public void setUserQueryTimeout(int queryTimeout) {
         if (queryTimeout > 0) {
