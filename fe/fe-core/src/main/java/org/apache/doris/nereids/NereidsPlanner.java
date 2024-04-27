@@ -256,7 +256,8 @@ public class NereidsPlanner extends Planner {
 
                 physicalPlan = postProcess(physicalPlan);
                 // cache plan
-                if (planCacheKey != null && idNeedPlanCache(cascadesContext, statementContext)) {
+                if (planCacheKey != null && idNeedPlanCache(cascadesContext, statementContext)
+                        && cascadesContext.getConnectContext().getPlanCache().get(planCacheKey) == null) {
                     cascadesContext.getConnectContext().addToPlanCache(planCacheKey, physicalPlan);
                 }
                 if (cascadesContext.getConnectContext().getSessionVariable().dumpNereidsMemo) {
