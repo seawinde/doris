@@ -136,6 +136,12 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 continue;
             }
             for (StructInfo queryStructInfo : queryStructInfos) {
+                if (queryStructInfo.getRelations().size() == 1 && context.getStructInfo().getRelations().size() == 1) {
+                    // query self should not rewrite
+                    if (queryStructInfo.getRelations().get(0).getTable().getId() == context.getMTMV().getId()) {
+                        continue;
+                    }
+                }
                 try {
                     if (rewrittenPlans.size() < cascadesContext.getConnectContext()
                             .getSessionVariable().getMaterializedViewRewriteSuccessCandidateNum()) {
