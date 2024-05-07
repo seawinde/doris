@@ -182,15 +182,20 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             return rewriteResults;
         }
         for (RelationMapping queryToViewTableMapping : queryToViewTableMappings) {
-            SlotMapping queryToViewSlotMapping = SlotMapping.generate(queryToViewTableMapping);
+            SlotMapping queryToViewSlotMapping =
+                    materializationContext.getSlotMappingFromCache(queryToViewTableMapping);
+            if (queryToViewSlotMapping == null) {
+                queryToViewSlotMapping = SlotMapping.generate(queryToViewTableMapping);
+                materializationContext.addSlotMappingToCache(queryToViewTableMapping, queryToViewSlotMapping);
+            }
             if (queryToViewSlotMapping == null) {
                 materializationContext.recordFailReason(queryStructInfo,
                         "Query to view slot mapping is null", () -> "");
                 continue;
             }
             SlotMapping viewToQuerySlotMapping = queryToViewSlotMapping.inverse();
-            LogicalCompatibilityContext compatibilityContext = LogicalCompatibilityContext.from(
-                    queryToViewTableMapping, queryToViewSlotMapping, queryStructInfo, viewStructInfo);
+            LogicalCompatibilityContext compatibilityContext = LogicalCompatibilityContext.fromWithCache(
+                    queryToViewTableMapping, viewToQuerySlotMapping, queryStructInfo, materializationContext);
             ComparisonResult comparisonResult = StructInfo.isGraphLogicalEquals(queryStructInfo, viewStructInfo,
                     compatibilityContext);
             if (comparisonResult.isInvalid()) {

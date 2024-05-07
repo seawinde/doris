@@ -25,7 +25,6 @@ import org.apache.doris.nereids.rules.exploration.mv.mapping.SlotMapping;
 import org.apache.doris.nereids.trees.expressions.EqualTo;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
-import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.visitor.DefaultExpressionRewriter;
 import org.apache.doris.nereids.trees.plans.ObjectId;
 import org.apache.doris.nereids.trees.plans.RelationId;
@@ -81,8 +80,72 @@ public class LogicalCompatibilityContext {
      * Generate logical compatibility context,
      * this make expression mapping between query and view by relation and the slot in relation mapping
      */
+    public static LogicalCompatibilityContext fromWithCache(RelationMapping relationMapping,
+            SlotMapping viewToQuerySlotMapping,
+            StructInfo queryStructInfo,
+            MaterializationContext materializationContext) {
+        // init node mapping
+        StructInfo viewStructInfo = materializationContext.getStructInfo();
+        BiMap<StructInfoNode, StructInfoNode> queryToViewNodeMapping = HashBiMap.create();
+        Map<RelationId, StructInfoNode> queryRelationIdStructInfoNodeMap
+                = queryStructInfo.getRelationIdStructInfoNodeMap();
+        Map<RelationId, StructInfoNode> viewRelationIdStructInfoNodeMap
+                = viewStructInfo.getRelationIdStructInfoNodeMap();
+        for (Map.Entry<MappedRelation, MappedRelation> relationMappingEntry :
+                relationMapping.getMappedRelationMap().entrySet()) {
+            StructInfoNode queryStructInfoNode = queryRelationIdStructInfoNodeMap.get(
+                    relationMappingEntry.getKey().getRelationId());
+            StructInfoNode viewStructInfoNode = viewRelationIdStructInfoNodeMap.get(
+                    relationMappingEntry.getValue().getRelationId());
+            if (queryStructInfoNode != null && viewStructInfoNode != null) {
+                queryToViewNodeMapping.put(queryStructInfoNode, viewStructInfoNode);
+            }
+        }
+        // init expression mapping
+        Map<Expression, Expression> queryShuttledExprToExprMap =
+                queryStructInfo.getShuttledHashConjunctsToConjunctsMap();
+        Map<Expression, Expression> viewShuttledExprToExprMap =
+                viewStructInfo.getShuttledHashConjunctsToConjunctsMap();
+
+        for (Map.Entry<Expression, Expression> viewExprEntry : viewShuttledExprToExprMap.entrySet()) {
+            Expression viewShuttledExpr = viewExprEntry.getKey();
+            Expression viewOriginalExpr = viewExprEntry.getKey();
+            Expression viewShuttledExprQueryBased =
+                    materializationContext.getViewShuttledExprQueryBasedByViewShuttledExpr(viewShuttledExpr);
+            if (viewShuttledExprQueryBased == null) {
+                viewShuttledExprQueryBased = orderSlotAsc(
+                        ExpressionUtils.replace(viewShuttledExpr, viewToQuerySlotMapping.toSlotReferenceMap()));
+                // chained map
+                materializationContext.putViewShuttledExpr(viewShuttledExpr, viewShuttledExprQueryBased);
+                materializationContext.putViewShuttledExprQueryBased(viewShuttledExprQueryBased, viewOriginalExpr);
+            }
+        }
+
+        BiMap<Expression, Expression> queryToViewEdgeMapping = HashBiMap.create();
+        for (Map.Entry<Expression, Expression> queryExprEntry : queryShuttledExprToExprMap.entrySet()) {
+            Expression queryShuttledExpr = queryExprEntry.getKey();
+            Expression originalQueryExpr = queryExprEntry.getValue();
+            // Get originalQueryExpr cache firstly
+            Expression originalViewExpr = materializationContext.getExpressionEdgeFromCache(queryShuttledExpr);
+            if (originalViewExpr == null) {
+                // if null, get in real time
+                originalViewExpr = materializationContext.getViewExprByViewShuttledExprQueryBased(
+                        orderSlotAsc(queryShuttledExpr));
+            }
+            if (originalViewExpr != null) {
+                queryToViewEdgeMapping.put(originalQueryExpr, originalViewExpr);
+                materializationContext.addExpressionEdgeToCache(queryShuttledExpr, originalViewExpr);
+            }
+        }
+        return new LogicalCompatibilityContext(queryToViewNodeMapping, queryToViewEdgeMapping, queryStructInfo);
+    }
+
+    /**
+     * Generate logical compatibility context,
+     * this make expression mapping between query and view by relation and the slot in relation mapping
+     */
     public static LogicalCompatibilityContext from(RelationMapping relationMapping,
-            SlotMapping queryToViewSlotMapping,
+            SlotMapping viewToQuerySlotMapping,
             StructInfo queryStructInfo,
             StructInfo viewStructInfo) {
         // init node mapping
@@ -102,8 +165,6 @@ public class LogicalCompatibilityContext {
             }
         }
         // init expression mapping
-        Map<SlotReference, SlotReference> viewToQuerySlotMapping = queryToViewSlotMapping.inverse()
-                .toSlotReferenceMap();
         Map<Expression, Expression> queryShuttledExprToExprMap =
                 queryStructInfo.getShuttledHashConjunctsToConjunctsMap();
         Map<Expression, Expression> viewShuttledExprToExprMap =
@@ -111,7 +172,7 @@ public class LogicalCompatibilityContext {
         final Map<Expression, Expression> viewEdgeToConjunctsMapQueryBased = new HashMap<>();
         viewShuttledExprToExprMap.forEach((shuttledExpr, expr) -> {
             viewEdgeToConjunctsMapQueryBased.put(
-                    orderSlotAsc(ExpressionUtils.replace(shuttledExpr, viewToQuerySlotMapping)),
+                    orderSlotAsc(ExpressionUtils.replace(shuttledExpr, viewToQuerySlotMapping.toSlotReferenceMap())),
                     expr);
         });
         BiMap<Expression, Expression> queryToViewEdgeMapping = HashBiMap.create();
