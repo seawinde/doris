@@ -27,6 +27,7 @@ import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalCatalogRelation;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalCatalogRelation;
 import org.apache.doris.nereids.trees.plans.visitor.TableCollector.TableCollectorContext;
+import org.apache.doris.qe.ConnectContext;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -74,7 +75,9 @@ public class TableCollector extends DefaultPlanVisitor<Plan, TableCollectorConte
             return;
         }
         try {
-            MTMVCache expandedMv = MTMVCache.from(mtmv, MTMVPlanUtil.createMTMVContext(mtmv));
+            ConnectContext mtmvContext = MTMVPlanUtil.createMTMVContext(mtmv);
+            mtmvContext.getSessionVariable().setDisableNereidsRules("PRUNE_EMPTY_PARTITION");
+            MTMVCache expandedMv = MTMVCache.from(mtmv, mtmvContext);
             expandedMv.getLogicalPlan().accept(this, context);
         } catch (AnalysisException e) {
             LOG.error(String.format(

@@ -506,6 +506,7 @@ public class StructInfo {
         // the aggregate above join
         private boolean containsTopAggregate = false;
         private int topAggregateNum = 0;
+        private int joinNum = 0;
         private boolean alreadyMeetJoin = false;
         private final Set<JoinType> supportJoinTypes;
 
@@ -541,6 +542,14 @@ public class StructInfo {
             this.topAggregateNum += 1;
         }
 
+        public int getJoinNum() {
+            return joinNum;
+        }
+
+        public void plusJoinNum() {
+            this.joinNum += 1;
+        }
+
         public static PlanCheckContext of(Set<JoinType> supportJoinTypes) {
             return new PlanCheckContext(supportJoinTypes);
         }
@@ -560,6 +569,7 @@ public class StructInfo {
             if (!join.getOtherJoinConjuncts().isEmpty()) {
                 return false;
             }
+            checkContext.plusJoinNum();
             return visit(join, checkContext);
         }
 

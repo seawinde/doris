@@ -533,6 +533,9 @@ public class SessionVariable implements Serializable, Writable {
     public static final String ENABLE_MATERIALIZED_VIEW_NEST_REWRITE
             = "enable_materialized_view_nest_rewrite";
 
+    public static final String MATERIALIZED_VIEW_JOIN_MAX_COUNT
+            = "materialized_view_join_max_count";
+
     public static final String CREATE_TABLE_PARTITION_MAX_NUM
             = "create_table_partition_max_num";
 
@@ -1671,6 +1674,12 @@ public class SessionVariable implements Serializable, Writable {
             description = {"是否允许嵌套物化视图改写",
                     "Whether enable materialized view nest rewrite"})
     public boolean enableMaterializedViewNestRewrite = false;
+
+    @VariableMgr.VarAttr(name = MATERIALIZED_VIEW_JOIN_MAX_COUNT, needForward = true,
+            description = {"参与透明改写物化视图允许包含的join最大数量",
+                    "Participate in transparent rewriting of the maximum number of "
+                            + "joins allowed in a materialized view"})
+    public int materializedViewJoinMaxCount = 10;
 
     @VariableMgr.VarAttr(name = CREATE_TABLE_PARTITION_MAX_NUM, needForward = true,
             description = {"建表时创建分区的最大数量",
@@ -3737,6 +3746,10 @@ public class SessionVariable implements Serializable, Writable {
 
     public boolean isEnableMaterializedViewNestRewrite() {
         return enableMaterializedViewNestRewrite;
+    }
+
+    public int getMaterializedViewJoinMaxCount() {
+        return materializedViewJoinMaxCount;
     }
 
     public int getCreateTablePartitionMaxNum() {

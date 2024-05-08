@@ -446,11 +446,12 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
      * slot reference equals currently.
      */
     @Override
-    protected boolean checkPattern(StructInfo structInfo) {
+    protected Pair<Boolean, PlanCheckContext> checkPattern(StructInfo structInfo) {
         PlanCheckContext checkContext = PlanCheckContext.of(SUPPORTED_JOIN_TYPE_SET);
         // if query or mv contains more then one top aggregate, should fail
-        return structInfo.getTopPlan().accept(StructInfo.PLAN_PATTERN_CHECKER, checkContext)
+        boolean checkResult = structInfo.getTopPlan().accept(StructInfo.PLAN_PATTERN_CHECKER, checkContext)
                 && checkContext.isContainsTopAggregate() && checkContext.getTopAggregateNum() <= 1;
+        return Pair.of(checkResult, checkContext);
     }
 
     /**

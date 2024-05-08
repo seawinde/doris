@@ -144,6 +144,166 @@ import java.util.stream.Collectors;
  */
 public class Rewriter extends AbstractBatchJobExecutor {
 
+    public static final List<RewriteJob> MATERIALIZED_VIEW_RULES = jobs(
+            topic("Eliminate optimization",
+                    bottomUp(
+                            new EliminateLimit(),
+                            new EliminateFilter(),
+                            new EliminateAggregate(),
+                            new EliminateAggCaseWhen(),
+                            new ReduceAggregateChildOutputRows(),
+                            new EliminateJoinCondition(),
+                            new EliminateAssertNumRows(),
+                            new EliminateSemiJoin()
+                    )
+            ),
+            // please note: this rule must run before NormalizeAggregate
+            topDown(new AdjustAggregateNullableForEmptySet()),
+            // The rule modification needs to be done after the subquery is unnested,
+            // because for scalarSubQuery, the connection condition is stored in apply in the analyzer phase,
+            // but when normalizeAggregate/normalizeSort is performed, the members in apply cannot be obtained,
+            // resulting in inconsistent output results and results in apply
+            topDown(
+                    new NormalizeAggregate(),
+                    new CountLiteralRewrite(),
+                    new NormalizeSort()
+            ),
+            topic("Rewrite join",
+                    // infer not null filter, then push down filter, and then reorder join(cross join to inner join)
+                    topDown(
+                            new InferAggNotNull(),
+                            new InferFilterNotNull(),
+                            new InferJoinNotNull()
+                    ),
+                    // ReorderJoin depends PUSH_DOWN_FILTERS
+                    // the PUSH_DOWN_FILTERS depends on lots of rules, e.g. merge project, eliminate outer,
+                    // sometimes transform the bottom plan make some rules usable which can apply to the top plan,
+                    // but top-down traverse can not cover this case in one iteration, so bottom-up is more
+                    // efficient because it can find the new plans and apply transform wherever it is
+                    bottomUp(RuleSet.PUSH_DOWN_FILTERS),
+                    // after push down, some new filters are generated, which needs to be optimized. (example: tpch q19)
+                    // topDown(new ExpressionOptimization()),
+                    topDown(
+                            new MergeFilters(),
+                            new ReorderJoin(),
+                            new PushFilterInsideJoin(),
+                            new FindHashConditionForJoin(),
+                            new ConvertInnerOrCrossJoin(),
+                            new EliminateNullAwareLeftAntiJoin()
+                    ),
+                    // push down SEMI Join
+                    bottomUp(
+                            new TransposeSemiJoinLogicalJoin(),
+                            new TransposeSemiJoinLogicalJoinProject(),
+                            new TransposeSemiJoinAgg(),
+                            new TransposeSemiJoinAggProject()
+                    ),
+                    topDown(
+                            new EliminateDedupJoinCondition()
+                    ),
+                    // eliminate useless not null or inferred not null
+                    // TODO: wait InferPredicates to infer more not null.
+                    bottomUp(new EliminateNotNull()),
+                    topDown(new ConvertInnerOrCrossJoin()),
+                    topDown(new ProjectOtherJoinConditionForNestedLoopJoin())
+            ),
+            topic("Column pruning and infer predicate",
+                    custom(RuleType.COLUMN_PRUNING, ColumnPruning::new),
+                    custom(RuleType.INFER_PREDICATES, InferPredicates::new),
+                    // column pruning create new project, so we should use PUSH_DOWN_FILTERS
+                    // to change filter-project to project-filter
+                    bottomUp(RuleSet.PUSH_DOWN_FILTERS),
+                    // after eliminate outer join in the PUSH_DOWN_FILTERS, we can infer more predicate and push down
+                    custom(RuleType.INFER_PREDICATES, InferPredicates::new),
+                    bottomUp(RuleSet.PUSH_DOWN_FILTERS),
+                    // after eliminate outer join, we can move some filters to join.otherJoinConjuncts,
+                    // this can help to translate plan to backend
+                    topDown(new PushFilterInsideJoin()),
+                    topDown(new FindHashConditionForJoin()),
+                    topDown(new ExpressionNormalization())
+            ),
+
+            // this rule should invoke after ColumnPruning
+            custom(RuleType.ELIMINATE_UNNECESSARY_PROJECT, EliminateUnnecessaryProject::new),
+
+            topic("Set operation optimization",
+                    // Do MergeSetOperation first because we hope to match pattern of Distinct SetOperator.
+                    topDown(new PushProjectThroughUnion(), new MergeProjects()),
+                    bottomUp(new MergeSetOperations(), new MergeSetOperationsExcept()),
+                    bottomUp(new PushProjectIntoOneRowRelation()),
+                    topDown(new MergeOneRowRelationIntoUnion()),
+                    topDown(new PushProjectIntoUnion()),
+                    costBased(topDown(new InferSetOperatorDistinct())),
+                    topDown(new BuildAggForUnion())
+            ),
+
+            topic("Eager aggregation",
+                    topDown(
+                            new PushDownAggThroughJoinOneSide(),
+                            new PushDownAggThroughJoin()
+                    ),
+                    custom(RuleType.PUSH_DOWN_DISTINCT_THROUGH_JOIN, PushDownDistinctThroughJoin::new)
+            ),
+
+            // this rule should be after topic "Column pruning and infer predicate"
+            topic("Join pull up",
+                    topDown(
+                            new EliminateFilter(),
+                            new PushDownFilterThroughProject(),
+                            new MergeProjects()
+                    ),
+                    topDown(
+                            new PullUpJoinFromUnionAll()
+                    ),
+                    custom(RuleType.COLUMN_PRUNING, ColumnPruning::new),
+                    bottomUp(RuleSet.PUSH_DOWN_FILTERS),
+                    custom(RuleType.ELIMINATE_UNNECESSARY_PROJECT, EliminateUnnecessaryProject::new)
+            ),
+            // TODO: these rules should be implementation rules, and generate alternative physical plans.
+            topic("Table/Physical optimization",
+                    topDown(
+                            new PruneOlapScanPartition(),
+                            new PruneEmptyPartition(),
+                            new PruneFileScanPartition(),
+                            new PushConjunctsIntoJdbcScan(),
+                            new PushConjunctsIntoOdbcScan(),
+                            new PushConjunctsIntoEsScan()
+                    )
+            ),
+            topic("MV optimization",
+                    topDown(
+                            new SelectMaterializedIndexWithAggregate(),
+                            new SelectMaterializedIndexWithoutAggregate(),
+                            new EliminateFilter(),
+                            new PushDownFilterThroughProject(),
+                            new MergeProjects(),
+                            new PruneOlapScanTablet()
+                    ),
+                    custom(RuleType.COLUMN_PRUNING, ColumnPruning::new),
+                    bottomUp(RuleSet.PUSH_DOWN_FILTERS),
+                    custom(RuleType.ELIMINATE_UNNECESSARY_PROJECT, EliminateUnnecessaryProject::new)
+            ),
+            // this rule batch must keep at the end of rewrite to do some plan check
+            topic("Final rewrite and check",
+                    custom(RuleType.CHECK_DATA_TYPES, CheckDataTypes::new),
+                    topDown(new PushDownFilterThroughProject(), new MergeProjects()),
+                    custom(RuleType.ADJUST_CONJUNCTS_RETURN_TYPE, AdjustConjunctsReturnType::new),
+                    bottomUp(
+                            new ExpressionRewrite(CheckLegalityAfterRewrite.INSTANCE),
+                            new CheckMatchExpression(),
+                            new CheckMultiDistinct(),
+                            new CheckAfterRewrite()
+                    )
+            ),
+            topic("Push project and filter on cte consumer to cte producer",
+                    topDown(
+                            new CollectFilterAboveConsumer(),
+                            new CollectCteConsumerOutput()
+                    )
+            ),
+            topic("Collect used column", custom(RuleType.COLLECT_COLUMNS, QueryColumnCollector::new))
+    );
+
     private static final List<RewriteJob> CTE_CHILDREN_REWRITE_JOBS = jobs(
             topic("Plan Normalization",
                     topDown(

@@ -166,6 +166,7 @@ public class PlanVisitorTest extends TestWithFeService {
 
     @Test
     public void test3() throws Exception {
+        connectContext.getSessionVariable().setDisableNereidsRules("PRUNE_EMPTY_PARTITION");
         PlanChecker.from(connectContext)
                 .checkPlannerResult("SELECT mv1.*, uuid() FROM mv1 "
                                 + "INNER JOIN view1 on mv1.c1 = view1.c2 "

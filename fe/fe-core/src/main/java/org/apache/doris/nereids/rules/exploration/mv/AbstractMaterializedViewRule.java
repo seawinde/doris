@@ -34,6 +34,7 @@ import org.apache.doris.nereids.properties.LogicalProperties;
 import org.apache.doris.nereids.rules.exploration.ExplorationRuleFactory;
 import org.apache.doris.nereids.rules.exploration.mv.Predicates.SplitPredicate;
 import org.apache.doris.nereids.rules.exploration.mv.StructInfo.InvalidPartitionRemover;
+import org.apache.doris.nereids.rules.exploration.mv.StructInfo.PlanCheckContext;
 import org.apache.doris.nereids.rules.exploration.mv.StructInfo.QueryScanPartitionsCollector;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.ExpressionMapping;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.RelationMapping;
@@ -142,7 +143,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
         List<StructInfo> uncheckedStructInfos = MaterializedViewUtils.extractStructInfo(queryPlan, cascadesContext,
                 materializedViewTableSet);
         uncheckedStructInfos.forEach(queryStructInfo -> {
-            boolean valid = checkPattern(queryStructInfo);
+            boolean valid = checkPattern(queryStructInfo).key();
             if (!valid) {
                 cascadesContext.getMaterializationContexts().forEach(ctx ->
                         ctx.recordFailReason(queryStructInfo, "Query struct info is invalid",
@@ -191,8 +192,9 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 continue;
             }
             SlotMapping viewToQuerySlotMapping = queryToViewSlotMapping.inverse();
-            LogicalCompatibilityContext compatibilityContext = LogicalCompatibilityContext.fromWithCache(
-                    queryToViewTableMapping, viewToQuerySlotMapping, queryStructInfo, materializationContext);
+            LogicalCompatibilityContext compatibilityContext = LogicalCompatibilityContext.from(
+                    queryToViewTableMapping, viewToQuerySlotMapping, queryStructInfo,
+                    materializationContext.getStructInfo());
             ComparisonResult comparisonResult = StructInfo.isGraphLogicalEquals(queryStructInfo, viewStructInfo,
                     compatibilityContext);
             if (comparisonResult.isInvalid()) {
@@ -243,7 +245,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             }
             rewrittenPlan = MaterializedViewUtils.rewriteByRules(cascadesContext,
                     childContext -> {
-                        Rewriter.getWholeTreeRewriter(childContext).execute();
+                        Rewriter.getCteChildrenRewriter(childContext, Rewriter.MATERIALIZED_VIEW_RULES).execute();
                         return childContext.getRewritePlan();
                     }, rewrittenPlan, queryPlan);
             // check the partitions used by rewritten plan is valid or not
@@ -646,11 +648,12 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
     /**
      * Check the pattern of query or materializedView is supported or not.
      */
-    protected boolean checkPattern(StructInfo structInfo) {
+    protected Pair<Boolean, PlanCheckContext> checkPattern(StructInfo structInfo) {
+        PlanCheckContext checkContext = new PlanCheckContext(SUPPORTED_JOIN_TYPE_SET);
         if (structInfo.getRelations().isEmpty()) {
-            return false;
+            return Pair.of(false, checkContext);
         }
-        return true;
+        return Pair.of(true, checkContext);
     }
 
     protected void recordIfRewritten(Plan plan, MaterializationContext context) {
@@ -672,8 +675,10 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 materializationId);
         if (cachedCheckResult == null) {
             // need check in real time
-            boolean checkResult = checkPattern(context.getStructInfo());
-            if (!checkResult) {
+            Pair<Boolean, PlanCheckContext> booleanPlanCheckContextPair = checkPattern(context.getStructInfo());
+            if (!booleanPlanCheckContextPair.key()
+                    || booleanPlanCheckContextPair.value().getJoinNum()
+                    > cascadesContext.getConnectContext().getSessionVariable().getMaterializedViewJoinMaxCount()) {
                 context.recordFailReason(context.getStructInfo(),
                         "View struct info is invalid", () -> String.format("view plan is %s",
                                 context.getStructInfo().getOriginalPlan().treeString()));
