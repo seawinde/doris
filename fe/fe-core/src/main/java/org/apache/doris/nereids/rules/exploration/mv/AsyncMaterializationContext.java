@@ -32,6 +32,7 @@ import com.google.common.collect.Multimap;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.BitSet;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -70,10 +71,15 @@ public class AsyncMaterializationContext extends MaterializationContext {
     @Override
     String getStringInfo() {
         StringBuilder failReasonBuilder = new StringBuilder("[").append("\n");
-        for (Map.Entry<ObjectId, Collection<Pair<String, String>>> reasonEntry : this.failReason.asMap().entrySet()) {
+        for (Map.Entry<Pair<ObjectId, BitSet>, Collection<Pair<String, String>>> reasonEntry : this.failReason.asMap()
+                .entrySet()) {
             failReasonBuilder
                     .append("\n")
-                    .append("ObjectId : ").append(reasonEntry.getKey()).append(".\n");
+                    .append("<ObjectId,BitSet> : ")
+                    .append(reasonEntry.getKey().key())
+                    .append("#")
+                    .append(reasonEntry.getKey().value())
+                    .append(".\n");
             for (Pair<String, String> reason : reasonEntry.getValue()) {
                 failReasonBuilder.append("Summary : ").append(reason.key()).append(".\n")
                         .append("Reason : ").append(reason.value()).append(".\n");
@@ -117,7 +123,7 @@ public class AsyncMaterializationContext extends MaterializationContext {
         return mvPlan;
     }
 
-    public Multimap<ObjectId, Pair<String, String>> getFailReason() {
+    public Multimap<Pair<ObjectId, BitSet>, Pair<String, String>> getFailReason() {
         return failReason;
     }
 

@@ -81,7 +81,7 @@ public abstract class MaterializationContext {
     // Record the reason, if rewrite by mv fail. The failReason should be empty if success.
     // The key is the query belonged group expression objectId, the value is the fail reasons because
     // for one materialization query may be multi when nested materialized view.
-    protected final Multimap<ObjectId, Pair<String, String>> failReason = HashMultimap.create();
+    protected final Multimap<Pair<ObjectId, BitSet>, Pair<String, String>> failReason = HashMultimap.create();
 
     /**
      * MaterializationContext, this contains necessary info for query rewriting by mv
@@ -191,7 +191,7 @@ public abstract class MaterializationContext {
         return available;
     }
 
-    public Multimap<ObjectId, Pair<String, String>> getFailReason() {
+    public Multimap<Pair<ObjectId, BitSet>, Pair<String, String>> getFailReason() {
         return failReason;
     }
 
@@ -199,10 +199,23 @@ public abstract class MaterializationContext {
         return enableRecordFailureDetail;
     }
 
-    public void setSuccess(boolean success) {
+    /**
+     * Set success if rewrite successfully, because nest query rewrite, one materialization can be used to
+     * rewrite by multi query struct info one time. So if rewrite successfully, also need the query struct info table
+     * id bit set
+     */
+    public void setSuccess(boolean success, BitSet bitSet) {
         this.success = success;
-        // TODO clear the fail message by according planId ?
-        this.failReason.clear();
+        if (bitSet.isEmpty()) {
+            this.failReason.clear();
+        } else {
+            // Remove all fail info which causes
+            for (Pair<ObjectId, BitSet> key : this.failReason.keySet()) {
+                if (StructInfo.containsAll(bitSet, key.value())) {
+                    this.failReason.removeAll(key);
+                }
+            }
+        }
     }
 
     public StructInfo getStructInfo() {
@@ -226,8 +239,11 @@ public abstract class MaterializationContext {
         if (this.success) {
             return;
         }
-        this.failReason.put(structInfo.getOriginalPlanId(),
-                Pair.of(summary, this.isEnableRecordFailureDetail() ? failureReasonSupplier.get() : ""));
+        this.failReason.put(Pair.of(structInfo.getOriginalPlanId(), structInfo.getTableBitSet()),
+                Pair.of(summary + "(" + structInfo.getTableNameUnionString() + ")",
+                        this.isEnableRecordFailureDetail()
+                                ? failureReasonSupplier.get() + "(" + structInfo.getTableNameUnionString() + ")"
+                                : ""));
     }
 
     @Override

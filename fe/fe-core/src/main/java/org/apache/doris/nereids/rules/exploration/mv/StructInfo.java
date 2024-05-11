@@ -67,6 +67,7 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -97,6 +98,8 @@ public class StructInfo {
     private final Plan bottomPlan;
     private final List<CatalogRelation> relations;
     private final BitSet tableBitSet = new BitSet();
+    // this is used to generate rewrite fail summary info, it's the union table names in tableBitSet
+    private final String tableNameUnionString;
     // this is for LogicalCompatibilityContext later
     private final Map<RelationId, StructInfoNode> relationIdStructInfoNodeMap;
     // this recorde the predicates which can pull up, not shuttled
@@ -126,7 +129,12 @@ public class StructInfo {
         this.topPlan = topPlan;
         this.bottomPlan = bottomPlan;
         this.relations = relations;
-        relations.forEach(relation -> this.tableBitSet.set((int) (relation.getTable().getId())));
+        List<String> tableNames = new LinkedList<>();
+        for (CatalogRelation relation : relations) {
+            this.tableBitSet.set((int) (relation.getTable().getId()));
+            tableNames.add(relation.getTable().getName());
+        }
+        this.tableNameUnionString = String.join(",", tableNames);
         this.relationIdStructInfoNodeMap = relationIdStructInfoNodeMap;
         this.predicates = predicates;
         if (predicates == null) {
@@ -395,6 +403,10 @@ public class StructInfo {
 
     public BitSet getTableBitSet() {
         return tableBitSet;
+    }
+
+    public String getTableNameUnionString() {
+        return tableNameUnionString;
     }
 
     /**

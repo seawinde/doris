@@ -320,7 +320,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                                 logicalProperties, queryPlan.getLogicalProperties()));
                 continue;
             }
-            recordIfRewritten(queryStructInfo.getOriginalPlan(), materializationContext);
+            recordIfRewritten(queryStructInfo, materializationContext);
             // if rewrite successfully, try to regenerate mv scan because it maybe used again
             materializationContext.tryReGenerateMvScanPlan(cascadesContext);
             rewriteResults.add(rewrittenPlan);
@@ -655,10 +655,11 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
         return true;
     }
 
-    protected void recordIfRewritten(Plan plan, MaterializationContext context) {
-        context.setSuccess(true);
-        if (plan.getGroupExpression().isPresent()) {
-            context.addMatchedGroup(plan.getGroupExpression().get().getOwnerGroup().getGroupId(), true);
+    protected void recordIfRewritten(StructInfo structInfo, MaterializationContext context) {
+        context.setSuccess(true, structInfo.getTableBitSet());
+        Plan originalPlan = structInfo.getOriginalPlan();
+        if (originalPlan.getGroupExpression().isPresent()) {
+            context.addMatchedGroup(originalPlan.getGroupExpression().get().getOwnerGroup().getGroupId(), true);
         }
     }
 

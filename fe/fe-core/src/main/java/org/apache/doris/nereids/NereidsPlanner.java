@@ -497,7 +497,8 @@ public class NereidsPlanner extends Planner {
             default:
                 plan = super.getExplainString(explainOptions)
                         + MaterializationContext.toSummaryString(cascadesContext.getMaterializationContexts(),
-                        this.getPhysicalPlan());
+                        this.getPhysicalPlan())
+                        + " \n";
                 if (statementContext != null) {
                     if (statementContext.isHasUnknownColStats()) {
                         plan += "planed with unknown column statistics\n";
