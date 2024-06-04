@@ -30,6 +30,7 @@ import org.apache.doris.nereids.NereidsPlanner;
 import org.apache.doris.nereids.analyzer.UnboundTableSink;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.glue.LogicalPlanAdapter;
+import org.apache.doris.nereids.rules.exploration.mv.InitMaterializationContextHook;
 import org.apache.doris.nereids.trees.plans.Explainable;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.PlanType;
@@ -142,6 +143,9 @@ public class InsertIntoTableCommand extends Command implements ForwardWithSync, 
 
             LogicalPlanAdapter logicalPlanAdapter = new LogicalPlanAdapter(logicalQuery, ctx.getStatementContext());
             NereidsPlanner planner = new NereidsPlanner(ctx.getStatementContext());
+            if (ctx.getSessionVariable().isEnableMaterializedViewRewrite()) {
+                planner.addHook(InitMaterializationContextHook.INSTANCE);
+            }
             planner.plan(logicalPlanAdapter, ctx.getSessionVariable().toThrift());
             executor.setPlanner(planner);
             executor.checkBlockRules();
