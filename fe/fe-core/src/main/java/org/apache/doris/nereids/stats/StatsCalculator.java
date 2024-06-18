@@ -19,6 +19,7 @@ package org.apache.doris.nereids.stats;
 
 import org.apache.doris.analysis.IntLiteral;
 import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.MTMV;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.Pair;
@@ -762,7 +763,8 @@ public class StatsCalculator extends DefaultPlanVisitor<Statistics, Void> {
     private Statistics computeCatalogRelation(CatalogRelation catalogRelation) {
         if (catalogRelation instanceof LogicalOlapScan) {
             LogicalOlapScan olap = (LogicalOlapScan) catalogRelation;
-            if (olap.getSelectedIndexId() != olap.getTable().getBaseIndexId()) {
+            if (olap.getSelectedIndexId() != olap.getTable().getBaseIndexId()
+                    || catalogRelation.getTable() instanceof MTMV) {
                 // mv is selected, return its estimated stats
                 Optional<Statistics> optStats = cascadesContext.getStatementContext()
                         .getStatistics(olap.getRelationId());
