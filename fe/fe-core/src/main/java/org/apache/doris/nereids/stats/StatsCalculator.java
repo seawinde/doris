@@ -761,7 +761,10 @@ public class StatsCalculator extends DefaultPlanVisitor<Statistics, Void> {
     //       2. Consider the influence of runtime filter
     //       3. Get NDV and column data size from StatisticManger, StatisticManager doesn't support it now.
     private Statistics computeCatalogRelation(CatalogRelation catalogRelation) {
+        boolean rowCountFromPartitions = false;
+        double rowCount = catalogRelation.getTable().getRowCountForNereids();
         if (catalogRelation instanceof LogicalOlapScan) {
+            OlapScan olapScan = (OlapScan) catalogRelation;
             LogicalOlapScan olap = (LogicalOlapScan) catalogRelation;
             if (olap.getSelectedIndexId() != olap.getTable().getBaseIndexId()
                     || catalogRelation.getTable() instanceof MTMV) {
@@ -773,6 +776,23 @@ public class StatsCalculator extends DefaultPlanVisitor<Statistics, Void> {
                     if (actualRowCount > optStats.get().getRowCount()) {
                         return optStats.get();
                     }
+                }
+            }
+
+            if (!olapScan.getSelectedPartitionIds().isEmpty()) {
+                double partRowCountSum = 0;
+                rowCountFromPartitions = true;
+                for (long id : olapScan.getSelectedPartitionIds()) {
+                    long partRowCount = olapScan.getTable().getPartition(id).getBaseIndex().getRowCount();
+                    // if any partition.rowCount is 0, fallback to table rowCount
+                    if (partRowCount == 0) {
+                        rowCountFromPartitions = false;
+                        break;
+                    }
+                    partRowCountSum += partRowCount;
+                }
+                if (rowCountFromPartitions) {
+                    rowCount = partRowCountSum;
                 }
             }
         }
@@ -791,7 +811,6 @@ public class StatsCalculator extends DefaultPlanVisitor<Statistics, Void> {
         TableStatsMeta tableMeta = analysisManager.findTableStatsStatus(table.getId());
         // rows newly updated after last analyze
         long deltaRowCount = tableMeta == null ? 0 : tableMeta.updatedRows.get();
-        double rowCount = catalogRelation.getTable().getRowCountForNereids();
         boolean hasUnknownCol = false;
         long idxId = -1;
         if (catalogRelation instanceof OlapScan) {
@@ -824,7 +843,7 @@ public class StatsCalculator extends DefaultPlanVisitor<Statistics, Void> {
             if (cache.avgSizeByte <= 0) {
                 colStatsBuilder.setAvgSizeByte(slotReference.getColumn().get().getType().getSlotSize());
             }
-            if (!cache.isUnKnown) {
+            if (!cache.isUnKnown && !rowCountFromPartitions) {
                 rowCount = Math.max(rowCount, cache.count + deltaRowCount);
             } else {
                 hasUnknownCol = true;
