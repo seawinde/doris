@@ -766,18 +766,6 @@ public class StatsCalculator extends DefaultPlanVisitor<Statistics, Void> {
         if (catalogRelation instanceof LogicalOlapScan) {
             OlapScan olapScan = (OlapScan) catalogRelation;
             LogicalOlapScan olap = (LogicalOlapScan) catalogRelation;
-            if (olap.getSelectedIndexId() != olap.getTable().getBaseIndexId()
-                    || catalogRelation.getTable() instanceof MTMV) {
-                // mv is selected, return its estimated stats
-                Optional<Statistics> optStats = cascadesContext.getStatementContext()
-                        .getStatistics(olap.getRelationId());
-                if (optStats.isPresent()) {
-                    double actualRowCount = catalogRelation.getTable().getRowCountForNereids();
-                    if (actualRowCount > optStats.get().getRowCount()) {
-                        return optStats.get();
-                    }
-                }
-            }
 
             if (!olapScan.getSelectedPartitionIds().isEmpty()) {
                 double partRowCountSum = 0;
@@ -793,6 +781,18 @@ public class StatsCalculator extends DefaultPlanVisitor<Statistics, Void> {
                 }
                 if (rowCountFromPartitions) {
                     rowCount = partRowCountSum;
+                }
+            }
+
+            if (olap.getSelectedIndexId() != olap.getTable().getBaseIndexId()
+                    || catalogRelation.getTable() instanceof MTMV) {
+                // mv is selected, return its estimated stats
+                Optional<Statistics> optStats = cascadesContext.getStatementContext()
+                        .getStatistics(olap.getRelationId());
+                if (optStats.isPresent()) {
+                    if (rowCount > optStats.get().getRowCount()) {
+                        return optStats.get();
+                    }
                 }
             }
         }
