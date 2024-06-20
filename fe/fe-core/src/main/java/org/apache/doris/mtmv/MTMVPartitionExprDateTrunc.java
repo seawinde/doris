@@ -47,7 +47,7 @@ import java.util.Optional;
 import java.util.Set;
 
 public class MTMVPartitionExprDateTrunc implements MTMVPartitionExprService {
-    private static Set<String> timeUnits = ImmutableSet.of("year", "month", "day");
+    private static Set<String> timeUnits = ImmutableSet.of("year", "month", "day", "hour");
     private String timeUnit;
 
     public MTMVPartitionExprDateTrunc(FunctionCallExpr functionCallExpr) throws AnalysisException {
