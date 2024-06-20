@@ -202,6 +202,9 @@ public class MTMVPartitionExprDateTrunc implements MTMVPartitionExprService {
             case "day":
                 result = value.plusDays(1L);
                 break;
+            case "hour":
+                result = value.plusHours(1L);
+                break;
             default:
                 throw new AnalysisException(
                         "async materialized view partition roll up not support timeUnit: " + timeUnit);
