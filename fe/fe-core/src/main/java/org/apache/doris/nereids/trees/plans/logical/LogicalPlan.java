@@ -26,6 +26,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiFunction;
@@ -89,6 +92,19 @@ public interface LogicalPlan extends Plan {
             fdBuilder.addUniqueByEqualSet(validEqualSet);
         }
         return fdBuilder.build();
+    }
+
+    /**
+     * Should keep the slot correctly when the function dependency Propagation.
+     * So replace the current slot by original output slots
+     */
+    default void replaceSlotInFuncDeps(DataTrait.Builder builder,
+            List<Slot> originalOutputs, List<Slot> newOutputs) {
+        Map<Slot, Slot> replaceMap = new HashMap<>();
+        for (int i = 0; i < newOutputs.size(); i++) {
+            replaceMap.put(originalOutputs.get(i), newOutputs.get(i));
+        }
+        builder.replace(replaceMap);
     }
 
     ImmutableSet<FdItem> computeFdItems();

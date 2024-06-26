@@ -18,8 +18,10 @@
 package org.apache.doris.nereids.trees.plans.logical;
 
 import org.apache.doris.catalog.Column;
+import org.apache.doris.catalog.MTMV;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Table;
+import org.apache.doris.mtmv.MTMVCache;
 import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.properties.DataTrait;
 import org.apache.doris.nereids.properties.LogicalProperties;
@@ -495,7 +497,15 @@ public class LogicalOlapScan extends LogicalCatalogRelation implements OlapScan 
             return;
         }
         Set<Slot> outputSet = Utils.fastToImmutableSet(getOutputSet());
-        if (getTable().getKeysType().isAggregationFamily()) {
+        if (getTable() instanceof MTMV) {
+            MTMV mtmv = (MTMV) getTable();
+            MTMVCache cache = mtmv.getCache();
+            if (cache == null) {
+                return;
+            }
+            Plan originalPlan = cache.getOriginalPlan();
+            builder.addUniqueSlot(originalPlan.getLogicalProperties().getTrait());
+        } else if (getTable().getKeysType().isAggregationFamily()) {
             ImmutableSet.Builder<Slot> uniqSlots = ImmutableSet.builderWithExpectedSize(outputSet.size());
             for (Slot slot : outputSet) {
                 if (!(slot instanceof SlotReference)) {
@@ -507,6 +517,49 @@ public class LogicalOlapScan extends LogicalCatalogRelation implements OlapScan 
                 }
             }
             builder.addUniqueSlot(uniqSlots.build());
+        }
+    }
+
+    @Override
+    public void computeUniform(DataTrait.Builder builder) {
+        if (getTable() instanceof MTMV) {
+            MTMV mtmv = (MTMV) getTable();
+            MTMVCache cache = mtmv.getCache();
+            if (cache == null) {
+                return;
+            }
+            Plan originalPlan = cache.getOriginalPlan();
+            builder.addUniformSlot(originalPlan.getLogicalProperties().getTrait());
+        }
+    }
+
+    @Override
+    public void computeEqualSet(DataTrait.Builder builder) {
+        if (getTable() instanceof MTMV && getTable().getName().equals("mv1")) {
+            System.out.println();
+        }
+        if (getTable() instanceof MTMV) {
+            MTMV mtmv = (MTMV) getTable();
+            MTMVCache cache = mtmv.getCache();
+            if (cache == null) {
+                return;
+            }
+            Plan originalPlan = cache.getOriginalPlan();
+            builder.addEqualSet(originalPlan.getLogicalProperties().getTrait());
+        }
+    }
+
+    @Override
+    public void computeFd(DataTrait.Builder builder) {
+        if (getTable() instanceof MTMV) {
+            MTMV mtmv = (MTMV) getTable();
+            MTMVCache cache = mtmv.getCache();
+            if (cache == null) {
+                return;
+            }
+            Plan originalPlan = cache.getOriginalPlan();
+            builder.addFuncDepsDG(originalPlan.getLogicalProperties().getTrait());
+            replaceSlotInFuncDeps(builder, originalPlan.getOutput(), getOutput());
         }
     }
 }
