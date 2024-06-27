@@ -49,6 +49,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.json.JSONObject;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -505,6 +506,7 @@ public class LogicalOlapScan extends LogicalCatalogRelation implements OlapScan 
             }
             Plan originalPlan = cache.getOriginalPlan();
             builder.addUniqueSlot(originalPlan.getLogicalProperties().getTrait());
+            builder.replaceUniqueBy(constructReplaceMap(mtmv));
         } else if (getTable().getKeysType().isAggregationFamily()) {
             ImmutableSet.Builder<Slot> uniqSlots = ImmutableSet.builderWithExpectedSize(outputSet.size());
             for (Slot slot : outputSet) {
@@ -530,6 +532,7 @@ public class LogicalOlapScan extends LogicalCatalogRelation implements OlapScan 
             }
             Plan originalPlan = cache.getOriginalPlan();
             builder.addUniformSlot(originalPlan.getLogicalProperties().getTrait());
+            builder.replaceUniformBy(constructReplaceMap(mtmv));
         }
     }
 
@@ -546,6 +549,7 @@ public class LogicalOlapScan extends LogicalCatalogRelation implements OlapScan 
             }
             Plan originalPlan = cache.getOriginalPlan();
             builder.addEqualSet(originalPlan.getLogicalProperties().getTrait());
+            builder.replaceEqualSetBy(constructReplaceMap(mtmv));
         }
     }
 
@@ -559,7 +563,16 @@ public class LogicalOlapScan extends LogicalCatalogRelation implements OlapScan 
             }
             Plan originalPlan = cache.getOriginalPlan();
             builder.addFuncDepsDG(originalPlan.getLogicalProperties().getTrait());
-            replaceSlotInFuncDeps(builder, originalPlan.getOutput(), getOutput());
+            builder.replaceFuncDepsBy(constructReplaceMap(mtmv));
         }
+    }
+
+    Map<Slot, Slot> constructReplaceMap(MTMV mtmv) {
+        Map<Slot, Slot> replaceMap = new HashMap<>();
+        List<Slot> originOutputs = mtmv.getCache().getOriginalPlan().getOutput();
+        for (int i = 0; i < getOutput().size(); i++) {
+            replaceMap.put(originOutputs.get(i), getOutput().get(i));
+        }
+        return replaceMap;
     }
 }
