@@ -46,8 +46,14 @@ import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.WindowExpression;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.DateTrunc;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.DayFloor;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.HourFloor;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.MinuteFloor;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.MonthFloor;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.YearFloor;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
 import org.apache.doris.nereids.trees.expressions.literal.VarcharLiteral;
+import org.apache.doris.nereids.trees.expressions.visitor.DefaultExpressionRewriter;
 import org.apache.doris.nereids.trees.plans.JoinType;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.PreAggStatus;
@@ -376,9 +382,13 @@ public class MaterializedViewUtils {
     private static final class MaterializedViewIncrementChecker extends
             DefaultPlanVisitor<Void, IncrementCheckerContext> {
 
+        public static Set<String> SUPPORT_DATE_FLOOR_PREFIX_SET = ImmutableSet.of(
+                "minute", "hour", "day", "month", "year");
+
         public static final MaterializedViewIncrementChecker INSTANCE = new MaterializedViewIncrementChecker();
         public static final Set<Class<? extends Expression>> SUPPORT_EXPRESSION_TYPES =
-                ImmutableSet.of(DateTrunc.class, SlotReference.class, Literal.class);
+                ImmutableSet.of(DateTrunc.class, SlotReference.class, Literal.class,
+                        MinuteFloor.class, HourFloor.class, DayFloor.class, MonthFloor.class, YearFloor.class);
 
         @Override
         public Void visitLogicalProject(LogicalProject<? extends Plan> project, IncrementCheckerContext context) {
@@ -647,6 +657,33 @@ public class MaterializedViewUtils {
                     context.setMvPartitionColumn(partitionColumns.iterator().next());
                 }
                 if (!context.getPartitionExpression().isPresent()) {
+                    // remove date_floor function
+                    partitionExpression = partitionExpression.accept(new DefaultExpressionRewriter<Void>() {
+                        @Override
+                        public Expression visitMinuteFloor(MinuteFloor minuteFloor, Void context) {
+                            return minuteFloor.getArgument(0);
+                        }
+
+                        @Override
+                        public Expression visitHourFloor(HourFloor hourFloor, Void context) {
+                            return hourFloor.getArgument(0);
+                        }
+
+                        @Override
+                        public Expression visitDayFloor(DayFloor dayFloor, Void context) {
+                            return dayFloor.getArgument(0);
+                        }
+
+                        @Override
+                        public Expression visitMonthFloor(MonthFloor monthFloor, Void context) {
+                            return monthFloor.getArgument(0);
+                        }
+
+                        @Override
+                        public Expression visitYearFloor(YearFloor yearFloor, Void context) {
+                            return yearFloor.getArgument(0);
+                        }
+                    }, null);
                     context.setPartitionExpression(partitionExpression);
                 }
             }
