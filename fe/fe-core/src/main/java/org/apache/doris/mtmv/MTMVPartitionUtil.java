@@ -31,9 +31,11 @@ import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.DdlException;
+import org.apache.doris.common.Pair;
 import org.apache.doris.mtmv.MTMVPartitionInfo.MTMVPartitionType;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
@@ -51,6 +53,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 public class MTMVPartitionUtil {
     private static final Logger LOG = LogManager.getLogger(MTMVPartitionUtil.class);
@@ -255,6 +258,7 @@ public class MTMVPartitionUtil {
             Set<String> relatedPartitionNames)
             throws AnalysisException {
         List<String> res = Lists.newArrayList();
+        Set<TableIf> tableToCheck = new HashSet<>();
         for (BaseTableInfo baseTableInfo : mtmv.getRelation().getBaseTablesOneLevel()) {
             TableIf table = MTMVUtil.getTable(baseTableInfo);
             if (!(table instanceof MTMVRelatedTableIf)) {
@@ -277,11 +281,14 @@ public class MTMVPartitionUtil {
                     res.add(mtmvRelatedTableIf.getName());
                 }
             } else {
-                if (!isSyncWithBaseTable(mtmv, partitionName, baseTableInfo)) {
-                    res.add(table.getName());
-                }
+                tableToCheck.add(table);
             }
         }
+        // TODO: 2024/8/5 batch to get table snapshots by tableToCheck and check
+        Map<TableIf, MTMVSnapshotIf> baseTableAndSnapshotMap = new HashMap<>();
+        Pair<Set<TableIf>, Set<TableIf>> checkedBaseTablePair = doCalcBaseTablesConsistency(mtmv, partitionName,
+                baseTableAndSnapshotMap, ImmutableSet.of());
+        res.addAll(checkedBaseTablePair.value().stream().map(TableIf::getName).collect(Collectors.toSet()));
         return res;
     }
 
@@ -408,24 +415,10 @@ public class MTMVPartitionUtil {
      * @return
      */
     private static boolean isSyncWithAllBaseTables(MTMV mtmv, String mtmvPartitionName, Set<BaseTableInfo> tables,
-            Set<String> excludedTriggerTables) throws AnalysisException {
-        for (BaseTableInfo baseTableInfo : tables) {
-            TableIf table = null;
-            try {
-                table = MTMVUtil.getTable(baseTableInfo);
-            } catch (AnalysisException e) {
-                LOG.warn("get table failed, {}", baseTableInfo, e);
-                return false;
-            }
-            if (excludedTriggerTables.contains(table.getName())) {
-                continue;
-            }
-            boolean syncWithBaseTable = isSyncWithBaseTable(mtmv, mtmvPartitionName, baseTableInfo);
-            if (!syncWithBaseTable) {
-                return false;
-            }
-        }
-        return true;
+            Set<String> excludedTriggerTables) {
+        Pair<Set<TableIf>, Set<TableIf>> checkedBaseTablePair = calcBaseTablesConsistency(mtmv, mtmvPartitionName,
+                tables, excludedTriggerTables);
+        return checkedBaseTablePair.value().isEmpty();
     }
 
     private static boolean isSyncWithBaseTable(MTMV mtmv, String mtmvPartitionName, BaseTableInfo baseTableInfo)
@@ -451,6 +444,86 @@ public class MTMVPartitionUtil {
         return mtmv.getRefreshSnapshot()
                 .equalsWithBaseTable(mtmvPartitionName, baseTable.getId(), baseTableCurrentSnapshot);
     }
+
+    /**
+     * Given mtmv and base tables which mtmv use, check the base talble data is the same to the mtmv
+     * @param mtmv mtmv to check
+     * @param mtmvPartitionName partition name to check
+     * @param baseTableInfoSet the base table to check which is in mtmv
+     * @param excludedTriggerTables exclude base table which doesn't participate in checking
+     */
+    private static Pair<Set<TableIf>, Set<TableIf>> calcBaseTablesConsistency(MTMV mtmv, String mtmvPartitionName,
+            Set<BaseTableInfo> baseTableInfoSet, Set<String> excludedTriggerTables) {
+        Set<TableIf> baseTableToCheckSet = new HashSet<>();
+        Set<TableIf> inconsistentBaseTables = new HashSet<>();
+        for (BaseTableInfo baseTableInfo : baseTableInfoSet) {
+            TableIf table = null;
+            try {
+                table = MTMVUtil.getTable(baseTableInfo);
+            } catch (AnalysisException e) {
+                LOG.warn("get table failed when calc base table consistency, {}", baseTableInfo, e);
+                // consider it is inConsistency
+                inconsistentBaseTables.add(table);
+            }
+            if (table != null && excludedTriggerTables.contains(table.getName())) {
+                continue;
+            }
+            baseTableToCheckSet.add(table);
+        }
+        // TODO: 2024/8/5 batch to get table snapshots by baseTableToCheckSet and check
+        Map<TableIf, MTMVSnapshotIf> baseTableAndSnapshotMap = new HashMap<>();
+        Pair<Set<TableIf>, Set<TableIf>> baseTablePair = doCalcBaseTablesConsistency(mtmv, mtmvPartitionName,
+                baseTableAndSnapshotMap, excludedTriggerTables);
+        if (!inconsistentBaseTables.isEmpty()) {
+            inconsistentBaseTables.addAll(baseTablePair.value());
+            return Pair.of(baseTablePair.key(), inconsistentBaseTables);
+        }
+        return baseTablePair;
+    }
+
+    /**
+     * Given mtmv and base tables which mtmv use, check the base talble data is the same to the mtmv
+     * @param mtmv mtmv to check
+     * @param mtmvPartitionName partition name to check
+     * @param baseTableInfoSet the base table to check which is in mtmv
+     * @param excludedTriggerTables exclude base table which doesn't participate in checking
+     */
+    private static Pair<Set<TableIf>, Set<TableIf>> doCalcBaseTablesConsistency(MTMV mtmv, String mtmvPartitionName,
+            Set<TableIf> baseTableInfoSet, Set<String> excludedTriggerTables) {
+        // TODO: 2024/8/5 batch to get table snapshots by baseTableToCheckSet and check
+        Map<TableIf, MTMVSnapshotIf> baseTableAndSnapshotMap = new HashMap<>();
+        return doCalcBaseTablesConsistency(mtmv, mtmvPartitionName, baseTableAndSnapshotMap, excludedTriggerTables);
+    }
+
+    /**
+     * Given mtmv and base tables which mtmv use, check the base talble data is the same to the mtmv
+     * @param mtmv mtmv to check
+     * @param mtmvPartitionName partition name to check
+     * @param baseTableSnapshotMap base table and it's actual snapshot map
+     * @param excludedTriggerTables exclude base table which doesn't participate in checking
+     */
+    private static Pair<Set<TableIf>, Set<TableIf>> doCalcBaseTablesConsistency(MTMV mtmv, String mtmvPartitionName,
+            Map<TableIf, MTMVSnapshotIf> baseTableSnapshotMap, Set<String> excludedTriggerTables) {
+        Set<TableIf> consistentBaseTables = new HashSet<>();
+        Set<TableIf> inconsistentBaseTables = new HashSet<>();
+        MTMVRefreshSnapshot refreshSnapshot = mtmv.getRefreshSnapshot();
+        for (Map.Entry<TableIf, MTMVSnapshotIf> tableAndSnapshotEntry : baseTableSnapshotMap.entrySet()) {
+            if (!(tableAndSnapshotEntry.getKey() instanceof MTMVRelatedTableIf)
+                    || excludedTriggerTables.contains(tableAndSnapshotEntry.getKey().getName())) {
+                // if not MTMVRelatedTableIf, we can not get snapshot from it,
+                // Currently, it is believed to be synchronous
+                continue;
+            }
+            if (refreshSnapshot.equalsWithBaseTable(mtmvPartitionName, tableAndSnapshotEntry.getKey().getId(),
+                    tableAndSnapshotEntry.getValue())) {
+                consistentBaseTables.add(tableAndSnapshotEntry.getKey());
+            } else {
+                inconsistentBaseTables.add(tableAndSnapshotEntry.getKey());
+            }
+        }
+        return Pair.of(consistentBaseTables, inconsistentBaseTables);
+    }
+
 
     /**
      * Generate updated snapshots of partitions to determine if they are synchronized
