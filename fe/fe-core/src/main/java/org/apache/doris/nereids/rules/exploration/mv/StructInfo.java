@@ -17,9 +17,10 @@
 
 package org.apache.doris.nereids.rules.exploration.mv;
 
-import org.apache.doris.catalog.Partition;
+import org.apache.doris.catalog.PartitionItem;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.Pair;
+import org.apache.doris.datasource.hive.HMSExternalTable;
 import org.apache.doris.mtmv.BaseTableInfo;
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.jobs.executor.Rewriter;
@@ -49,6 +50,8 @@ import org.apache.doris.nereids.trees.plans.commands.UpdateMvByPartitionCommand.
 import org.apache.doris.nereids.trees.plans.commands.UpdateMvByPartitionCommand.PredicateAdder;
 import org.apache.doris.nereids.trees.plans.logical.LogicalAggregate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalCatalogRelation;
+import org.apache.doris.nereids.trees.plans.logical.LogicalFileScan;
+import org.apache.doris.nereids.trees.plans.logical.LogicalFileScan.SelectedPartitions;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
 import org.apache.doris.nereids.trees.plans.logical.LogicalJoin;
 import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
@@ -730,10 +733,10 @@ public class StructInfo {
      * Collect partitions on base table
      */
     public static class QueryScanPartitionsCollector extends DefaultPlanVisitor<Plan,
-            Map<BaseTableInfo, Set<Partition>>> {
+            Map<BaseTableInfo, Set<String>>> {
         @Override
         public Plan visitLogicalCatalogRelation(LogicalCatalogRelation catalogRelation,
-                Map<BaseTableInfo, Set<Partition>> targetTablePartitionMap) {
+                Map<BaseTableInfo, Set<String>> targetTablePartitionMap) {
             TableIf table = catalogRelation.getTable();
             BaseTableInfo relatedPartitionTable = new BaseTableInfo(table);
             if (!targetTablePartitionMap.containsKey(relatedPartitionTable)) {
@@ -742,13 +745,35 @@ public class StructInfo {
             if (catalogRelation instanceof LogicalOlapScan) {
                 // Handle olap table
                 LogicalOlapScan logicalOlapScan = (LogicalOlapScan) catalogRelation;
-                Set<Partition> tablePartitions = targetTablePartitionMap.get(relatedPartitionTable);
+                Set<String> tablePartitions = targetTablePartitionMap.get(relatedPartitionTable);
                 for (Long partitionId : logicalOlapScan.getSelectedPartitionIds()) {
-                    tablePartitions.add(logicalOlapScan.getTable().getPartition(partitionId));
+                    tablePartitions.add(logicalOlapScan.getTable().getPartition(partitionId).getName());
+                }
+            } else if (catalogRelation instanceof LogicalFileScan
+                    && catalogRelation.getTable() instanceof HMSExternalTable) {
+                // support hive partition check
+                Set<String> tablePartitions = targetTablePartitionMap.get(relatedPartitionTable);
+                LogicalFileScan logicalFileScan = (LogicalFileScan) catalogRelation;
+                HMSExternalTable hiveExternalTable = (HMSExternalTable) logicalFileScan.getTable();
+                SelectedPartitions selectedPartitions = logicalFileScan.getSelectedPartitions();
+                Map<Long, PartitionItem> selectedPartitionsMap = selectedPartitions.selectedPartitions;
+                if (selectedPartitionsMap.isEmpty()) {
+                    // logicalFileScan.getSelectedPartitions() can not get select partitions when without filter
+                    // So query without filter would hit mv without check the data valid
+                    targetTablePartitionMap.clear();
+                    return catalogRelation;
+                }
+                for (Long partitionId : selectedPartitionsMap.keySet()) {
+                    String partitionName = hiveExternalTable.getPartitionNameById(partitionId);
+                    if (partitionName == null) {
+                        // can not use the mv
+                        tablePartitions.clear();
+                        break;
+                    }
+                    tablePartitions.add(partitionName);
                 }
             } else {
                 // todo Support other type partition table
-                // Not support to partition check now when query external catalog table, support later.
                 targetTablePartitionMap.clear();
             }
             return catalogRelation;

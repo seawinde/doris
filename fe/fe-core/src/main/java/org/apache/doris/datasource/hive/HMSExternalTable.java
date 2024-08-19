@@ -741,6 +741,18 @@ public class HMSExternalTable extends ExternalTable implements MTMVRelatedTableI
         return res;
     }
 
+    /**
+     * Get hive partition name by id
+     */
+    public String getPartitionNameById(long id) {
+        HiveMetaStoreCache cache = Env.getCurrentEnv().getExtMetaCacheMgr()
+                .getMetaStoreCache((HMSExternalCatalog) getCatalog());
+        HiveMetaStoreCache.HivePartitionValues hivePartitionValues = cache.getPartitionValues(
+                getDbName(), getName(), getPartitionColumnTypes());
+        BiMap<Long, String> inverse = hivePartitionValues.getPartitionNameToIdMap().inverse();
+        return inverse.get(id);
+    }
+
     private HiveMetaStoreCache.HivePartitionValues getHivePartitionValues() {
         HiveMetaStoreCache cache = Env.getCurrentEnv().getExtMetaCacheMgr()
                 .getMetaStoreCache((HMSExternalCatalog) getCatalog());

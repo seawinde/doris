@@ -135,7 +135,7 @@ suite("part_partition_invalid", "p0,external") {
             AS ${query_sql}
         """
 
-    sql """REFRESH MATERIALIZED VIEW ${mv_name} complete"""
+    sql """REFRESH MATERIALIZED VIEW ${mv_name} auto"""
     waitingMTMVTaskFinished(getJobName(olap_db, mv_name))
     order_qt_query_mv_directly """select * from ${mv_name};"""
 
@@ -151,11 +151,12 @@ suite("part_partition_invalid", "p0,external") {
         contains("${mv_name}(${mv_name})")
     }
 
-    // data change in external table doesn't influence query rewrite,
-    // if want to use new data in external table should be refresh manually
+    // partition data change in external hive table influence query rewrite,
     sql """insert into ${hive_catalog_name}.${hive_database}.${hive_table} values(3, 3, 'ok', 99.5, 'a', 'b', 1, 'yy', '2023-10-19');"""
     explain {
         sql(""" ${query_sql}""")
+        // logicalFileScan.getSelectedPartitions() can not get select partitions without filter
+        // So query without filter would hit mv without check the data valid
         contains("${mv_name}(${mv_name})")
     }
     order_qt_after_modify_data_without_refresh_catalog """ ${query_sql}"""
@@ -165,7 +166,7 @@ suite("part_partition_invalid", "p0,external") {
             ${query_sql} where o_orderdate = '2023-10-19';
         """)
         // query invalid partition data, should hit mv, because not check now.
-        contains("${mv_name}(${mv_name})")
+        notContains("${mv_name}(${mv_name})")
     }
     order_qt_after_modify_and_without_refresh_catalog_19 """ ${query_sql} where o_orderdate = '2023-10-19';"""
 
@@ -182,6 +183,8 @@ suite("part_partition_invalid", "p0,external") {
     sql """ REFRESH CATALOG ${hive_catalog_name} PROPERTIES("invalid_cache" = "true"); """
     explain {
         sql(""" ${query_sql}""")
+        // logicalFileScan.getSelectedPartitions() can not get select partitions without filter
+        // So query without filter would hit mv without check the data valid
         contains("${mv_name}(${mv_name})")
     }
     order_qt_after_modify_data_and_refresh_catalog """ ${query_sql}"""
@@ -190,8 +193,8 @@ suite("part_partition_invalid", "p0,external") {
         sql("""
             ${query_sql} where o_orderdate = '2023-10-19';
         """)
-        // query invalid partition data, should hit mv, because not check now.
-        contains("${mv_name}(${mv_name})")
+        // query invalid partition data, should not hit mv.
+        notContains("${mv_name}(${mv_name})")
     }
     order_qt_after_modify_and_refresh_catalog_19 """ ${query_sql} where o_orderdate = '2023-10-19';"""
 
@@ -218,13 +221,15 @@ suite("part_partition_invalid", "p0,external") {
     sql """insert into ${hive_catalog_name}.${hive_database}.${hive_table} values(6, 7, 'ok', 29.5, 'x', 'y', 6, 'ss', '2023-10-20');"""
     explain {
         sql(""" ${query_sql}""")
+        // logicalFileScan.getSelectedPartitions() can not get select partitions without filter
+        // So query without filter would hit mv without check the data valid
         contains("${mv_name}(${mv_name})")
     }
     order_qt_after_add_data_without_refresh_catalog """ ${query_sql}"""
 
     explain {
         sql("""
-            ${query_sql}
+            ${query_sql} where o_orderdate = '2023-10-19';
         """)
         // query invalid partition data, should hit mv, because not check now.
         contains("${mv_name}(${mv_name})")
@@ -235,7 +240,7 @@ suite("part_partition_invalid", "p0,external") {
         sql("""
             ${query_sql} where o_orderdate = '2023-10-20';
         """)
-        // query valid partition data, should hit mv
+        // query invalid partition data, should hit mv
         notContains("${mv_name}(${mv_name})")
     }
     order_qt_after_add_and_without_refresh_catalog_20 """ ${query_sql} where o_orderdate = '2023-10-20';"""
@@ -244,6 +249,8 @@ suite("part_partition_invalid", "p0,external") {
     sql """ REFRESH CATALOG ${hive_catalog_name} PROPERTIES("invalid_cache" = "true"); """
     explain {
         sql(""" ${query_sql}""")
+        // logicalFileScan.getSelectedPartitions() can not get select partitions without filter
+        // So query without filter would hit mv without check the data valid
         contains("${mv_name}(${mv_name})")
     }
     order_qt_after_add_data_with_refresh_catalog """ ${query_sql}"""

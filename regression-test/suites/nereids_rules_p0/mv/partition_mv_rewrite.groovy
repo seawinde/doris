@@ -543,23 +543,23 @@ suite("partition_mv_rewrite") {
 
     // enable union rewrite
 // this depends on getting corret partitions when base table delete partition, tmp comment
-//    sql "SET enable_materialized_view_rewrite=false"
-//    order_qt_query_21_0_before "${roll_up_all_partition_sql}"
-//    sql "SET enable_materialized_view_rewrite=true"
-//    explain {
-//        sql("${roll_up_all_partition_sql}")
-//        // should rewrite successful when union rewrite enalbe if base table add new partition
-//        contains("mv_10086(mv_10086)")
-//    }
-//    order_qt_query_21_0_after "${roll_up_all_partition_sql}"
-//
-//    sql "SET enable_materialized_view_rewrite=false"
-//    order_qt_query_22_0_before "${roll_up_partition_sql}"
-//    sql "SET enable_materialized_view_rewrite=true"
-//    explain {
-//        sql("${roll_up_partition_sql}")
-//        // should rewrite successfully when union rewrite enable if doesn't query new partition
-//        contains("mv_10086(mv_10086)")
-//    }
-//    order_qt_query_22_0_after "${roll_up_partition_sql}"
+    sql "SET enable_materialized_view_rewrite=false"
+    order_qt_query_21_0_before "${roll_up_all_partition_sql}"
+    sql "SET enable_materialized_view_rewrite=true"
+    explain {
+        sql("${roll_up_all_partition_sql}")
+        // should rewrite successful when union rewrite enalbe if base table add new partition
+        contains("mv_10086(mv_10086)")
+    }
+    order_qt_query_21_0_after "${roll_up_all_partition_sql}"
+
+    sql "SET enable_materialized_view_rewrite=false"
+    order_qt_query_22_0_before "${roll_up_partition_sql}"
+    sql "SET enable_materialized_view_rewrite=true"
+    explain {
+        sql("${roll_up_partition_sql}")
+        // should rewrite successfully when union rewrite enable if doesn't query new partition
+        contains("mv_10086(mv_10086)")
+    }
+    order_qt_query_22_0_after "${roll_up_partition_sql}"
 }
