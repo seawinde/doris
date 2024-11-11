@@ -323,6 +323,10 @@ public class StatsCalculator extends DefaultPlanVisitor<Statistics, Void> {
             // after estimate the outer join of plan1 (join C), we update B.id.ndv=1, but A.id.ndv is not updated
             // then we estimate plan2. the stats of plan2 is denoted by stats2. obviously, stats2.A.id.ndv is 1
             // now we update OwnerGroup().getStatistics().A.id.ndv to 1
+            Statistics oldStats = groupExpression.getOwnerGroup().getStatistics();
+            if (oldStats.getRowCount() > newStats.getRowCount()) {
+                groupExpression.getOwnerGroup().setStatistics(newStats);
+            }
             groupExpression.getOwnerGroup().getStatistics().updateNdv(newStats);
         }
         groupExpression.setEstOutputRowCount(newStats.getRowCount());
