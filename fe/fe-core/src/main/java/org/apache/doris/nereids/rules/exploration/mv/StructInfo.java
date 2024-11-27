@@ -61,8 +61,10 @@ import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanVisitor;
 import org.apache.doris.nereids.trees.plans.visitor.ExpressionLineageReplacer;
 import org.apache.doris.nereids.util.ExpressionUtils;
 
+import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Multimap;
 import com.google.common.collect.Sets;
 
 import java.util.ArrayList;
@@ -110,8 +112,10 @@ public class StructInfo {
     private SplitPredicate splitPredicate;
     private EquivalenceClass equivalenceClass;
     // Key is the expression shuttled and the value is the origin expression
+    // Sometimes origin expressions are different and shuttled expression is same
+    // Such as origin expressions are l_partkey#0 > 1 and l_partkey#10 > 1 and shuttled expression is l_partkey#10 > 1
     // this is for building LogicalCompatibilityContext later.
-    private final Map<ExpressionPosition, Map<Expression, Expression>> shuttledExpressionsToExpressionsMap;
+    private final Map<ExpressionPosition, Multimap<Expression, Expression>> shuttledExpressionsToExpressionsMap;
     // Record the exprId and the corresponding expr map, this is used by expression shuttled
     private final Map<ExprId, Expression> namedExprIdAndExprMapping;
     private final List<? extends Expression> planOutputShuttledExpressions;
@@ -123,7 +127,7 @@ public class StructInfo {
             Plan bottomPlan, List<CatalogRelation> relations,
             Map<RelationId, StructInfoNode> relationIdStructInfoNodeMap,
             @Nullable Predicates predicates,
-            Map<ExpressionPosition, Map<Expression, Expression>> shuttledExpressionsToExpressionsMap,
+            Map<ExpressionPosition, Multimap<Expression, Expression>> shuttledExpressionsToExpressionsMap,
             Map<ExprId, Expression> namedExprIdAndExprMapping,
             BitSet tableIdSet,
             SplitPredicate splitPredicate,
@@ -168,7 +172,7 @@ public class StructInfo {
 
     private static boolean collectStructInfoFromGraph(HyperGraph hyperGraph,
             Plan topPlan,
-            Map<ExpressionPosition, Map<Expression, Expression>> shuttledExpressionsToExpressionsMap,
+            Map<ExpressionPosition, Multimap<Expression, Expression>> shuttledExpressionsToExpressionsMap,
             Map<ExprId, Expression> namedExprIdAndExprMapping,
             List<CatalogRelation> relations,
             Map<RelationId, StructInfoNode> relationIdStructInfoNodeMap,
@@ -311,7 +315,7 @@ public class StructInfo {
         // collect struct info fromGraph
         List<CatalogRelation> relationList = new ArrayList<>();
         Map<RelationId, StructInfoNode> relationIdStructInfoNodeMap = new LinkedHashMap<>();
-        Map<ExpressionPosition, Map<Expression, Expression>> shuttledHashConjunctsToConjunctsMap =
+        Map<ExpressionPosition, Multimap<Expression, Expression>> shuttledHashConjunctsToConjunctsMap =
                 new LinkedHashMap<>();
         Map<ExprId, Expression> namedExprIdAndExprMapping = new LinkedHashMap<>();
         BitSet tableBitSet = new BitSet();
@@ -401,18 +405,18 @@ public class StructInfo {
         return relationIdStructInfoNodeMap;
     }
 
-    public Map<ExpressionPosition, Map<Expression, Expression>> getShuttledExpressionsToExpressionsMap() {
+    public Map<ExpressionPosition, Multimap<Expression, Expression>> getShuttledExpressionsToExpressionsMap() {
         return shuttledExpressionsToExpressionsMap;
     }
 
     private static void putShuttledExpressionsToExpressionsMap(
-            Map<ExpressionPosition, Map<Expression, Expression>> shuttledExpressionsToExpressionsMap,
+            Map<ExpressionPosition, Multimap<Expression, Expression>> shuttledExpressionsToExpressionsMap,
             ExpressionPosition expressionPosition,
             Expression key, Expression value) {
-        Map<Expression, Expression> expressionExpressionMap = shuttledExpressionsToExpressionsMap.get(
+        Multimap<Expression, Expression> expressionExpressionMap = shuttledExpressionsToExpressionsMap.get(
                 expressionPosition);
         if (expressionExpressionMap == null) {
-            expressionExpressionMap = new LinkedHashMap<>();
+            expressionExpressionMap = HashMultimap.create();
             shuttledExpressionsToExpressionsMap.put(expressionPosition, expressionExpressionMap);
         }
         expressionExpressionMap.put(key, value);

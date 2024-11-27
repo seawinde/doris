@@ -17,15 +17,20 @@
 
 package org.apache.doris.nereids.rules.exploration.mv.mapping;
 
+import org.apache.doris.common.Pair;
 import org.apache.doris.nereids.trees.expressions.ExprId;
 import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.plans.RelationId;
 import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
 
+import com.google.common.collect.BiMap;
+import com.google.common.collect.HashBiMap;
 import com.google.common.collect.ImmutableList;
 
+import java.lang.reflect.Array;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +42,70 @@ import javax.annotation.Nullable;
  * it can also represent the mapping from slot to it's index
  */
 public abstract class Mapping {
+
+    /**
+     * Permutation and remove duplicated element
+     * For example:
+     * Given [1, 4, 5] and [191, 194, 195]
+     * This would return
+     * [
+     * [(1, 191) (4, 194) (5, 195)],
+     * [(1, 191) (4, 195) (5, 194)],
+     * [(1, 194) (4, 191) (5, 195)],
+     * [(1, 194) (4, 195) (5, 191)],
+     * [(1, 195) (4, 191) (5, 194)],
+     * [(1, 195) (4, 194) (5, 191)]
+     * ]
+     * */
+    protected <M> List<BiMap<M, M>> getUniquePermutation(M[] left, M[] right, Class<M> type) {
+        boolean needSwap = left.length > right.length;
+        if (needSwap) {
+            M[] temp = left;
+            left = right;
+            right = temp;
+        }
+
+        boolean[] used = new boolean[right.length];
+        M[] current = (M[]) Array.newInstance(type, left.length);
+        List<Pair<M[], M[]>> results = new ArrayList<>();
+        backtrack(left, right, 0, used, current, results);
+        if (needSwap) {
+            List<Pair<M[], M[]>> tmpResults = results;
+            results = new ArrayList<>();
+            for (Pair<M[], M[]> relation : tmpResults) {
+                results.add(Pair.of(relation.value(), relation.key()));
+            }
+        }
+        List<BiMap<M, M>> mappingPowerList = new ArrayList<>();
+        for (Pair<M[], M[]> combination : results) {
+            BiMap<M, M> combinationBiMap = HashBiMap.create();
+            M[] key = combination.key();
+            M[] value = combination.value();
+            int length = Math.min(key.length, value.length);
+            for (int i = 0; i < length; i++) {
+                combinationBiMap.put(key[i], value[i]);
+            }
+            mappingPowerList.add(combinationBiMap);
+        }
+        return mappingPowerList;
+    }
+
+    protected <M> void backtrack(M[] left, M[] right, int index,
+            boolean[] used, M[] current, List<Pair<M[], M[]>> results) {
+        if (index == left.length) {
+            results.add(Pair.of(Arrays.copyOf(left, left.length), Arrays.copyOf(current, current.length)));
+            return;
+        }
+
+        for (int i = 0; i < right.length; i++) {
+            if (!used[i]) {
+                used[i] = true;
+                current[index] = right[i];
+                backtrack(left, right, index + 1, used, current, results);
+                used[i] = false;
+            }
+        }
+    }
 
     /**
      * The relation for mapping

@@ -180,8 +180,8 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                     () -> String.format("matchMode is %s", matchMode));
             return rewriteResults;
         }
-        List<RelationMapping> queryToViewTableMappings = RelationMapping.generate(queryStructInfo.getRelations(),
-                viewStructInfo.getRelations());
+        List<RelationMapping> queryToViewTableMappings = RelationMapping.EMPTY_INSTANCE.generate(
+                queryStructInfo.getRelations(), viewStructInfo.getRelations());
         // if any relation in query and view can not map, bail out.
         if (queryToViewTableMappings == null) {
             materializationContext.recordFailReason(queryStructInfo,

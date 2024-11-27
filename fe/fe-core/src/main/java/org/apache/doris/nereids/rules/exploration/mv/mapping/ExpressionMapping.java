@@ -18,11 +18,19 @@
 package org.apache.doris.nereids.rules.exploration.mv.mapping;
 
 import org.apache.doris.common.Pair;
+import org.apache.doris.nereids.trees.expressions.EqualTo;
 import org.apache.doris.nereids.trees.expressions.Expression;
+import org.apache.doris.nereids.trees.expressions.NamedExpression;
+import org.apache.doris.nereids.trees.expressions.SlotReference;
+import org.apache.doris.nereids.trees.expressions.visitor.DefaultExpressionRewriter;
 import org.apache.doris.nereids.util.ExpressionUtils;
 import org.apache.doris.nereids.util.Utils;
 
 import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.BiMap;
+import com.google.common.collect.HashBiMap;
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 
@@ -31,11 +39,15 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 
 /**
  * Expression mapping, maybe one expression map to multi expression
  */
 public class ExpressionMapping extends Mapping {
+
+    public static final ExpressionMapping EMPTY_INSTANCE =
+            ExpressionMapping.generate(ImmutableList.of(), ImmutableList.of());
     private final Multimap<Expression, Expression> expressionMapping;
 
     public ExpressionMapping(Multimap<Expression, Expression> expressionMapping) {
@@ -100,6 +112,115 @@ public class ExpressionMapping extends Mapping {
             expressionMultiMap.put(sourceExpressions.get(i), targetExpressions.get(i));
         }
         return new ExpressionMapping(expressionMultiMap);
+    }
+
+    /**
+     * Generate expression mapping, just map the first element in queryShuttledExprToExprMap and
+     * viewShuttledExprToExprMap
+     * Such as
+     * queryShuttledExprToExprMap is {c1#0 : [c1#1, c1#2]}
+     * viewShuttledExprToExprMap is {c1#3 : [c1#4, c1#4]}
+     * if viewToQuerySlotMapping is {c1#0 : c1#3}
+     * the mapping result is {c1#1 : c1#4}
+     * */
+    public static BiMap<Expression, Expression> generateExpressionMappingFirst(
+            Map<SlotReference, SlotReference> viewToQuerySlotMapping,
+            Multimap<Expression, Expression> queryShuttledExprToExprMap,
+            Multimap<Expression, Expression> viewShuttledExprToExprMap) {
+        final Map<Expression, Expression> viewEdgeToConjunctsMapQueryBased = new HashMap<>();
+        BiMap<Expression, Expression> queryToViewEdgeMapping = HashBiMap.create();
+        if (queryShuttledExprToExprMap == null || viewShuttledExprToExprMap == null
+                || queryShuttledExprToExprMap.isEmpty() || viewShuttledExprToExprMap.isEmpty()) {
+            return queryToViewEdgeMapping;
+        }
+        viewShuttledExprToExprMap.forEach((shuttledExpr, expr) -> {
+            viewEdgeToConjunctsMapQueryBased.put(
+                    orderSlotAsc(ExpressionUtils.replace(shuttledExpr, viewToQuerySlotMapping)), expr);
+        });
+        queryShuttledExprToExprMap.forEach((exprSet, edge) -> {
+            Expression viewExpr = viewEdgeToConjunctsMapQueryBased.get(orderSlotAsc(exprSet));
+            if (viewExpr != null) {
+                queryToViewEdgeMapping.putIfAbsent(edge, viewExpr);
+            }
+        });
+        return queryToViewEdgeMapping;
+    }
+
+    /**
+     * Generate expression mapping, map the unique combine element in queryShuttledExprToExprMap and
+     * viewShuttledExprToExprMap
+     * Such as
+     * queryShuttledExprToExprMap is {c1#0 : [c1#1, c1#2]}
+     * viewShuttledExprToExprMap is {c1#3 : [c1#4, c1#5]}
+     * if viewToQuerySlotMapping is {c1#0 : c1#3}
+     * the mapping result is {c1#1 : c1#4, c1#2 : c1#5}
+     * */
+    public List<BiMap<Expression, Expression>> generateExpressionMappingCombine(
+            Map<SlotReference, SlotReference> viewToQuerySlotMapping,
+            Multimap<Expression, Expression> queryShuttledExprToExprMap,
+            Multimap<Expression, Expression> viewShuttledExprToExprMap) {
+        List<BiMap<Expression, Expression>> result = new ArrayList<>();
+        if (queryShuttledExprToExprMap == null || viewShuttledExprToExprMap == null
+                || queryShuttledExprToExprMap.isEmpty() || viewShuttledExprToExprMap.isEmpty()) {
+            return result;
+        }
+
+        final Multimap<Expression, Expression> viewEdgeToConjunctsMapQueryBased = HashMultimap.create();
+        viewShuttledExprToExprMap.forEach((shuttledExpr, expr) -> {
+            viewEdgeToConjunctsMapQueryBased.put(
+                    orderSlotAsc(ExpressionUtils.replace(shuttledExpr, viewToQuerySlotMapping)), expr);
+        });
+
+        List<List<BiMap<Expression, Expression>>> expressionMappingList = new ArrayList<>();
+        for (Entry<Expression, Collection<Expression>> queryEntry : queryShuttledExprToExprMap.asMap().entrySet()) {
+            Collection<Expression> viewExpressions = viewEdgeToConjunctsMapQueryBased.get(
+                    orderSlotAsc(queryEntry.getKey()));
+            if (queryEntry.getValue().size() == 1 && viewExpressions.size() == 1) {
+                HashBiMap<Expression, Expression> expressionMapping = HashBiMap.create();
+                expressionMapping.put(queryEntry.getValue().iterator().next(), viewExpressions.iterator().next());
+                expressionMappingList.add(ImmutableList.of(expressionMapping));
+                continue;
+            }
+            List<BiMap<Expression, Expression>> permutationMappings = getUniquePermutation(
+                    queryEntry.getValue().toArray(new Expression[0]),
+                    viewExpressions.toArray(new Expression[0]), Expression.class);
+            expressionMappingList.add(permutationMappings);
+        }
+        return Lists.cartesianProduct(expressionMappingList).stream()
+                .map(listMapping -> {
+                    if (listMapping.size() == 1) {
+                        return listMapping.get(0);
+                    }
+                    HashBiMap<Expression, Expression> expressionMapping = HashBiMap.create();
+                    for (BiMap<Expression, Expression> expressionBiMap : listMapping) {
+                        expressionMapping.putAll(expressionBiMap);
+                    }
+                    return expressionMapping;
+                })
+                .collect(ImmutableList.toImmutableList());
+    }
+
+    private static Expression orderSlotAsc(Expression expression) {
+        return expression.accept(ExpressionSlotOrder.INSTANCE, null);
+    }
+
+    private static final class ExpressionSlotOrder extends DefaultExpressionRewriter<Void> {
+        public static final ExpressionSlotOrder INSTANCE = new ExpressionSlotOrder();
+
+        @Override
+        public Expression visitEqualTo(EqualTo equalTo, Void context) {
+            if (!(equalTo.getArgument(0) instanceof NamedExpression)
+                    || !(equalTo.getArgument(1) instanceof NamedExpression)) {
+                return equalTo;
+            }
+            NamedExpression left = (NamedExpression) equalTo.getArgument(0);
+            NamedExpression right = (NamedExpression) equalTo.getArgument(1);
+            if (right.getExprId().asInt() < left.getExprId().asInt()) {
+                return new EqualTo(right, left);
+            } else {
+                return equalTo;
+            }
+        }
     }
 
     @Override

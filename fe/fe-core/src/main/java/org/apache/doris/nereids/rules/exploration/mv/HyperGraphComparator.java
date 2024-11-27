@@ -35,6 +35,7 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.util.ExpressionUtils;
 import org.apache.doris.nereids.util.JoinUtils;
 
+import com.google.common.collect.BiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -75,9 +76,9 @@ public class HyperGraphComparator {
     private final Map<Edge, List<? extends Expression>> pullUpViewExprWithEdge = new HashMap<>();
     private final LogicalCompatibilityContext logicalCompatibilityContext;
     // this records the slots which needs to reject null
-    // the key is the target join which should reject null, the value is a pair, the first value of the pair is the
-    // join type, the second value is also a pair which left represents the slots in the left of join that should
-    // reject null, right represents the slots in the right of join that should reject null.
+    // the key is the view join edge which should reject null, the value is a pair, the first value of the pair is the
+    // query join type, the second value is also a pair which left represents the slots in the left of view join that
+    // should reject null, right represents the slots in the right of view join that should reject null.
     private final Map<JoinEdge, Pair<JoinType, Pair<Set<Slot>, Set<Slot>>>> inferredViewEdgeWithCond = new HashMap<>();
     private List<JoinEdge> viewJoinEdgesAfterInferring;
     private List<FilterEdge> viewFilterEdgesAfterInferring;
@@ -104,6 +105,18 @@ public class HyperGraphComparator {
      */
     public static ComparisonResult isLogicCompatible(HyperGraph queryHG, HyperGraph viewHG,
             LogicalCompatibilityContext ctx) {
+        ComparisonResult logicCompatible;
+        if (ctx.getQueryToViewFilterEdgeExpressionMappingList().size() > 1) {
+            for (BiMap<Expression, Expression> expressionBiMap : ctx.getQueryToViewFilterEdgeExpressionMappingList()) {
+                LogicalCompatibilityContext eachCtx = ctx.withQueryToViewFilterEdgeExpressionMapping(expressionBiMap);
+                logicCompatible =
+                        new HyperGraphComparator(queryHG, viewHG, eachCtx).isLogicCompatible();
+                if (logicCompatible.isInvalid()) {
+                    continue;
+                }
+                return logicCompatible;
+            }
+        }
         return new HyperGraphComparator(queryHG, viewHG, ctx).isLogicCompatible();
     }
 
