@@ -48,6 +48,10 @@ public abstract class NamedExpression extends Expression {
         throw new UnboundException("qualifier");
     }
 
+    public boolean isNameFromChild() {
+        return false;
+    }
+
     /**
      * Get qualified name of NamedExpression.
      *

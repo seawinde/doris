@@ -116,7 +116,8 @@ public abstract class LogicalSetOperation extends AbstractLogicalPlan implements
         List<Slot> slots = resetNullableForLeftOutputs();
         ImmutableList.Builder<NamedExpression> newOutputs = ImmutableList.builderWithExpectedSize(slots.size());
         for (Slot slot : slots) {
-            newOutputs.add(new SlotReference(slot.toSql(), slot.getDataType(), slot.nullable()));
+            newOutputs.add(new SlotReference(slot.toSql(), slot.getDataType(), slot.nullable(),
+                    slot.isNameFromChild()));
         }
         return newOutputs.build();
     }
@@ -151,10 +152,10 @@ public abstract class LogicalSetOperation extends AbstractLogicalPlan implements
             Expression newLeft = TypeCoercionUtils.castIfNotSameTypeStrict(left, compatibleType);
             Expression newRight = TypeCoercionUtils.castIfNotSameTypeStrict(right, compatibleType);
             if (newLeft instanceof Cast) {
-                newLeft = new Alias(newLeft, left.getName());
+                newLeft = new Alias(newLeft, left.getName(), left.isNameFromChild());
             }
             if (newRight instanceof Cast) {
-                newRight = new Alias(newRight, right.getName());
+                newRight = new Alias(newRight, right.getName(), right.isNameFromChild());
             }
             newLeftOutputs.add((NamedExpression) newLeft);
             newRightOutputs.add((NamedExpression) newRight);

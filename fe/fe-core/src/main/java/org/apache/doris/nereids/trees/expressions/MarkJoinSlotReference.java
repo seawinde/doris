@@ -30,12 +30,12 @@ public class MarkJoinSlotReference extends SlotReference {
     final boolean existsHasAgg;
 
     public MarkJoinSlotReference(String name) {
-        super(name, BooleanType.INSTANCE, true);
+        super(name, BooleanType.INSTANCE, true, false);
         this.existsHasAgg = false;
     }
 
     public MarkJoinSlotReference(String name, boolean existsHasAgg) {
-        super(name, BooleanType.INSTANCE, true);
+        super(name, BooleanType.INSTANCE, true, false);
         this.existsHasAgg = existsHasAgg;
     }
 

@@ -56,41 +56,47 @@ public class SlotReference extends Slot {
 
     private final TableIf table;
     private final Column column;
+    private final boolean nameFromChild;
 
     public SlotReference(String name, DataType dataType) {
         this(StatementScopeIdGenerator.newExprId(), name, dataType, true, ImmutableList.of(),
-                null, null, Optional.empty(), ImmutableList.of());
+                null, null, Optional.empty(), ImmutableList.of(), false);
     }
 
-    public SlotReference(String name, DataType dataType, boolean nullable) {
+    public SlotReference(String name, DataType dataType, boolean nullable, boolean nameFromChild) {
         this(StatementScopeIdGenerator.newExprId(), name, dataType, nullable, ImmutableList.of(),
-                null, null, Optional.empty(), ImmutableList.of());
+                null, null, Optional.empty(), ImmutableList.of(), nameFromChild);
     }
 
     public SlotReference(String name, DataType dataType, boolean nullable, List<String> qualifier) {
         this(StatementScopeIdGenerator.newExprId(), name, dataType, nullable,
-                qualifier, null, null, Optional.empty(), ImmutableList.of());
+                qualifier, null, null, Optional.empty(), ImmutableList.of(),
+                false);
     }
 
     public SlotReference(ExprId exprId, String name, DataType dataType, boolean nullable, List<String> qualifier) {
-        this(exprId, name, dataType, nullable, qualifier, null, null, Optional.empty(), ImmutableList.of());
+        this(exprId, name, dataType, nullable, qualifier, null, null, Optional.empty(),
+                ImmutableList.of(), false);
     }
 
     public SlotReference(ExprId exprId, String name, DataType dataType, boolean nullable,
             List<String> qualifier, @Nullable TableIf table, @Nullable Column column) {
-        this(exprId, name, dataType, nullable, qualifier, table, column, Optional.empty(), ImmutableList.of());
+        this(exprId, name, dataType, nullable, qualifier, table, column, Optional.empty(), ImmutableList.of(),
+                false);
     }
 
     public SlotReference(ExprId exprId, String name, DataType dataType, boolean nullable,
             List<String> qualifier, @Nullable TableIf table, @Nullable Column column, Optional<String> internalName) {
-        this(exprId, name, dataType, nullable, qualifier, table, column, internalName, ImmutableList.of());
+        this(exprId, name, dataType, nullable, qualifier, table, column, internalName, ImmutableList.of(),
+                false);
     }
 
     public SlotReference(ExprId exprId, String name, DataType dataType, boolean nullable,
             List<String> qualifier, @Nullable TableIf table, @Nullable Column column,
-            Optional<String> internalName, List<String> subColLabels) {
+            Optional<String> internalName, List<String> subColLabels, boolean nameFromChild) {
         this(exprId, () -> name, dataType, nullable, qualifier, table, column,
-                buildInternalName(() -> name, subColLabels, internalName), subColLabels, Optional.empty());
+                buildInternalName(() -> name, subColLabels, internalName), subColLabels, Optional.empty(),
+                nameFromChild);
     }
 
     /**
@@ -108,7 +114,8 @@ public class SlotReference extends Slot {
     public SlotReference(ExprId exprId, Supplier<String> name, DataType dataType, boolean nullable,
             List<String> qualifier, @Nullable TableIf table, @Nullable Column column,
             Supplier<Optional<String>> internalName, List<String> subPath,
-            Optional<Pair<Integer, Integer>> indexInSql) {
+            Optional<Pair<Integer, Integer>> indexInSql,
+            boolean nameFromChild) {
         super(indexInSql);
         this.exprId = exprId;
         this.name = name;
@@ -120,6 +127,7 @@ public class SlotReference extends Slot {
         this.column = column;
         this.subPath = Objects.requireNonNull(subPath, "subPath can not be null");
         this.internalName = internalName;
+        this.nameFromChild = nameFromChild;
     }
 
     public static SlotReference of(String name, DataType type) {
@@ -135,13 +143,15 @@ public class SlotReference extends Slot {
         DataType dataType = DataType.fromCatalogType(column.getType());
         return new SlotReference(StatementScopeIdGenerator.newExprId(), column::getName, dataType,
                 column.isAllowNull(), qualifier, table, column,
-                () -> Optional.of(column.getName()), ImmutableList.of(), Optional.empty());
+                () -> Optional.of(column.getName()), ImmutableList.of(), Optional.empty(),
+                false);
     }
 
     public static SlotReference fromColumn(TableIf table, Column column, String name, List<String> qualifier) {
         DataType dataType = DataType.fromCatalogType(column.getType());
         return new SlotReference(StatementScopeIdGenerator.newExprId(), name, dataType,
-            column.isAllowNull(), qualifier, table, column, Optional.empty(), ImmutableList.of());
+            column.isAllowNull(), qualifier, table, column, Optional.empty(), ImmutableList.of(),
+                false);
     }
 
     @Override
@@ -259,7 +269,7 @@ public class SlotReference extends Slot {
             return this;
         }
         return new SlotReference(exprId, name, dataType, nullable,
-                qualifier, table, column, internalName, subPath, indexInSqlString);
+                qualifier, table, column, internalName, subPath, indexInSqlString, nameFromChild);
     }
 
     @Override
@@ -268,13 +278,13 @@ public class SlotReference extends Slot {
             return this;
         }
         return new SlotReference(exprId, name, dataType, nullable,
-                qualifier, table, column, internalName, subPath, indexInSqlString);
+                qualifier, table, column, internalName, subPath, indexInSqlString, nameFromChild);
     }
 
     @Override
     public SlotReference withQualifier(List<String> qualifier) {
         return new SlotReference(exprId, name, dataType, nullable, qualifier, table, column, internalName, subPath,
-                indexInSqlString);
+                indexInSqlString, nameFromChild);
     }
 
     @Override
@@ -284,29 +294,29 @@ public class SlotReference extends Slot {
         }
         return new SlotReference(
                 exprId, () -> name, dataType, nullable, qualifier, table, column, internalName, subPath,
-                indexInSqlString);
+                indexInSqlString, nameFromChild);
     }
 
     @Override
     public SlotReference withExprId(ExprId exprId) {
         return new SlotReference(exprId, name, dataType, nullable, qualifier, table, column, internalName, subPath,
-                indexInSqlString);
+                indexInSqlString, nameFromChild);
     }
 
     public SlotReference withSubPath(List<String> subPath) {
         return new SlotReference(exprId, name, dataType, !subPath.isEmpty() || nullable,
-                qualifier, table, column, internalName, subPath, indexInSqlString);
+                qualifier, table, column, internalName, subPath, indexInSqlString, nameFromChild);
     }
 
     @Override
     public Slot withIndexInSql(Pair<Integer, Integer> index) {
         return new SlotReference(exprId, name, dataType, nullable, qualifier, table, column, internalName, subPath,
-                Optional.ofNullable(index));
+                Optional.ofNullable(index), nameFromChild);
     }
 
     public SlotReference withColumn(Column column) {
         return new SlotReference(exprId, name, dataType, nullable, qualifier, table, column, internalName, subPath,
-                indexInSqlString);
+                indexInSqlString, nameFromChild);
     }
 
     public boolean isVisible() {
@@ -336,5 +346,10 @@ public class SlotReference extends Slot {
 
     public String getQualifiedNameWithBackquote() throws UnboundException {
         return Utils.qualifiedNameWithBackquote(getQualifier(), getName());
+    }
+
+    @Override
+    public boolean isNameFromChild() {
+        return nameFromChild;
     }
 }

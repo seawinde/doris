@@ -51,6 +51,10 @@ public class Alias extends NamedExpression implements UnaryExpression {
         this(StatementScopeIdGenerator.newExprId(), child, name, false);
     }
 
+    public Alias(Expression child, String name, boolean nameFromChild) {
+        this(StatementScopeIdGenerator.newExprId(), child, name, nameFromChild);
+    }
+
     public Alias(Expression child) {
         this(StatementScopeIdGenerator.newExprId(), ImmutableList.of(child),
                 Suppliers.memoize(child::toSql), ImmutableList.of(), true);
@@ -99,7 +103,8 @@ public class Alias extends NamedExpression implements UnaryExpression {
                 internalName,
                 slotReference != null
                         ? slotReference.getSubPath()
-                        : ImmutableList.of(), Optional.empty()
+                        : ImmutableList.of(), Optional.empty(),
+                nameFromChild
         );
     }
 
@@ -168,6 +173,7 @@ public class Alias extends NamedExpression implements UnaryExpression {
         return visitor.visitAlias(this, context);
     }
 
+    @Override
     public boolean isNameFromChild() {
         return nameFromChild;
     }
