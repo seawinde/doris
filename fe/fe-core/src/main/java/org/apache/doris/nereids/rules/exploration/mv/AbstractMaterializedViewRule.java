@@ -540,9 +540,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
         if (materializationContext instanceof SyncMaterializationContext
                 && queryStructInfo.getBottomPlan() instanceof LogicalOlapScan) {
             LogicalOlapScan olapScan = (LogicalOlapScan) queryStructInfo.getBottomPlan();
-            if (olapScan.getSelectedIndexId() != olapScan.getTable().getBaseIndexId()) {
-                return false;
-            }
+            return olapScan.getSelectedIndexId() == olapScan.getTable().getBaseIndexId();
         }
         return true;
     }
@@ -935,6 +933,18 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
     // check mv plan is valid or not, this can use cache for performance
     private boolean isMaterializationValid(Plan queryPlan, CascadesContext cascadesContext,
             MaterializationContext context) {
+        if (!context.getStructInfo().isValid()) {
+            context.recordFailReason(context.getStructInfo(),
+                    "View original struct info is invalid", () -> String.format("view plan is %s",
+                            context.getStructInfo().getOriginalPlan().treeString()));
+            if (LOG.isDebugEnabled()) {
+                LOG.debug(String.format("View struct info is invalid, mv identifier is %s,  query plan is %s,"
+                                + "view plan is %s",
+                        context.generateMaterializationIdentifier(), queryPlan.treeString(),
+                        context.getStructInfo().getTopPlan().treeString()));
+            }
+            return false;
+        }
         long materializationId = context.generateMaterializationIdentifier().hashCode();
         Boolean cachedCheckResult = cascadesContext.getMemo().materializationHasChecked(this.getClass(),
                 materializationId);
@@ -965,18 +975,6 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                             context.getStructInfo().getOriginalPlan().treeString()));
             if (LOG.isDebugEnabled()) {
                 LOG.debug(String.format("View struct info is invalid, mv identifier is %s, query plan is %s,"
-                                + "view plan is %s",
-                        context.generateMaterializationIdentifier(), queryPlan.treeString(),
-                        context.getStructInfo().getTopPlan().treeString()));
-            }
-            return false;
-        }
-        if (!context.getStructInfo().isValid()) {
-            context.recordFailReason(context.getStructInfo(),
-                    "View original struct info is invalid", () -> String.format("view plan is %s",
-                            context.getStructInfo().getOriginalPlan().treeString()));
-            if (LOG.isDebugEnabled()) {
-                LOG.debug(String.format("View struct info is invalid, mv identifier is %s,  query plan is %s,"
                                 + "view plan is %s",
                         context.generateMaterializationIdentifier(), queryPlan.treeString(),
                         context.getStructInfo().getTopPlan().treeString()));
