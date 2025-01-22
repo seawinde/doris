@@ -37,6 +37,7 @@ import org.apache.doris.nereids.trees.plans.algebra.Relation;
 import org.apache.doris.nereids.trees.plans.commands.ExplainCommand.ExplainLevel;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalRelation;
 import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanVisitor;
+import org.apache.doris.nereids.util.ExpressionUtils;
 import org.apache.doris.statistics.ColumnStatistic;
 import org.apache.doris.statistics.Statistics;
 
@@ -47,6 +48,7 @@ import com.google.common.collect.Multimap;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -101,6 +103,9 @@ public abstract class MaterializationContext {
     // for one materialization query may be multi when nested materialized view.
     protected final Multimap<ObjectId, Pair<String, String>> failReason = HashMultimap.create();
     protected List<String> identifier;
+    // ExpressionUtils.shuttleExpressionWithLineage is expensive operation, so cache the mv original exprssion
+    // and it's shuttled expression
+    private static final Map<BitSet, Map<Expression, Expression>> SHUTTLED_EXPRESSION_CACHE = new HashMap<>();
 
     /**
      * MaterializationContext, this contains necessary info for query rewriting by materialization
@@ -340,6 +345,58 @@ public abstract class MaterializationContext {
         }
         this.failReason.put(structInfo.getOriginalPlanId(),
                 Pair.of(summary, this.isEnableRecordFailureDetail() ? failureReasonSupplier.get() : ""));
+    }
+
+    public static List<Expression> getCachedShuttledExpressions(List<Expression> expressions, Plan plan,
+            BitSet tableBitSet) {
+        int size = expressions.size();
+        List<Expression> cachedShuttledExpressions = new ArrayList<>(size);
+        List<Integer> partShouldShuttledExprIndexes = new ArrayList<>();
+        List<Expression> partShouldShuttledExpressions = new ArrayList<>();
+        Map<Expression, Expression> expressionMap = SHUTTLED_EXPRESSION_CACHE.get(tableBitSet);
+        if (expressionMap == null) {
+            expressionMap = new HashMap<>();
+            SHUTTLED_EXPRESSION_CACHE.put(tableBitSet, expressionMap);
+        }
+        // Try to get from cache
+        for (int index = 0; index < size; index++) {
+            Expression curExpression = expressions.get(index);
+            Expression cachedShuttledExpression = expressionMap.get(curExpression);
+            if (cachedShuttledExpression == null) {
+                partShouldShuttledExprIndexes.add(index);
+                partShouldShuttledExpressions.add(curExpression);
+                continue;
+            }
+            cachedShuttledExpressions.add(index, cachedShuttledExpression);
+        }
+        if (cachedShuttledExpressions.size() == expressions.size()) {
+            return cachedShuttledExpressions;
+        }
+        // from shuttled expression
+        List<? extends Expression> partShuttledExpressions = ExpressionUtils.shuttleExpressionWithLineage(
+                partShouldShuttledExpressions, plan, tableBitSet);
+        // put to cache and in result
+        for (int index = 0; index < partShuttledExpressions.size(); index++) {
+            Expression partShuttledExpression = partShuttledExpressions.get(index);
+            expressionMap.put(partShouldShuttledExpressions.get(index), partShuttledExpression);
+            cachedShuttledExpressions.add(partShouldShuttledExprIndexes.get(index), partShuttledExpression);
+        }
+        return cachedShuttledExpressions;
+    }
+
+    public static Expression getCachedShuttledExpression(Expression expression, Plan plan, BitSet tableBitSet) {
+        Map<Expression, Expression> expressionMap = SHUTTLED_EXPRESSION_CACHE.get(tableBitSet);
+        if (expressionMap == null) {
+            expressionMap = new HashMap<>();
+            SHUTTLED_EXPRESSION_CACHE.put(tableBitSet, expressionMap);
+        }
+        Expression cachedShuttledExpression = expressionMap.get(expression);
+        if (cachedShuttledExpression != null) {
+            return cachedShuttledExpression;
+        }
+        Expression shuttledExpression = ExpressionUtils.shuttleExpressionWithLineage(expression, plan, tableBitSet);
+        expressionMap.put(expression, shuttledExpression);
+        return shuttledExpression;
     }
 
     @Override
