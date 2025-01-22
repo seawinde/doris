@@ -343,7 +343,6 @@ public class ExpressionUtils {
      * select b - 5 as a, d from table
      * );
      * op expression before is: a + 10 as a1, d. after is: b - 5 + 10, d
-     * todo to get from plan struct info
      */
     public static List<? extends Expression> shuttleExpressionWithLineage(List<? extends Expression> expressions,
             Plan plan,
@@ -368,6 +367,86 @@ public class ExpressionUtils {
                     new MaterializedViewException("shuttle expression fail"));
         }
         return replacedExpressions;
+    }
+
+    /**
+     * Replace the slot in expressions with the lineage identifier from specified baseTable sets or target table types
+     * and cache
+     * example as following:
+     * select a + 10 as a1, d from (
+     * select b - 5 as a, d from table
+     * );
+     * op expression before is: a + 10 as a1, d. after is: b - 5 + 10, d
+     */
+    public static List<? extends Expression> shuttleExpressionWithLineage(List<? extends Expression> expressions,
+            Plan plan, BitSet tableBitSet, Map<BitSet, Map<Expression, Expression>> expressionCache) {
+        if (expressionCache == null) {
+            return shuttleExpressionWithLineage(expressions, plan, tableBitSet);
+        }
+        int size = expressions.size();
+        List<Expression> cachedShuttledExpressions = new ArrayList<>(size);
+        cachedShuttledExpressions.addAll(expressions);
+        List<Integer> partShouldShuttledExprIndexes = new ArrayList<>();
+        List<Expression> partShouldShuttledExpressions = new ArrayList<>();
+        Map<Expression, Expression> expressionMap = expressionCache.get(tableBitSet);
+        if (expressionMap == null) {
+            expressionMap = new HashMap<>();
+            expressionCache.put(tableBitSet, expressionMap);
+        }
+        boolean cacheMiss = false;
+        // Try to get from cache
+        for (int index = 0; index < size; index++) {
+            Expression curExpression = expressions.get(index);
+            Expression cachedShuttledExpression = expressionMap.get(curExpression);
+            if (cachedShuttledExpression == null) {
+                partShouldShuttledExprIndexes.add(index);
+                partShouldShuttledExpressions.add(curExpression);
+                cacheMiss = true;
+                continue;
+            }
+            cachedShuttledExpressions.set(index, cachedShuttledExpression);
+        }
+        if (!cacheMiss) {
+            return cachedShuttledExpressions;
+        }
+        // from shuttled expression
+        List<? extends Expression> partShuttledExpressions = ExpressionUtils.shuttleExpressionWithLineage(
+                partShouldShuttledExpressions, plan, tableBitSet);
+        // put to cache and in result
+        for (int index = 0; index < partShuttledExpressions.size(); index++) {
+            Expression partShuttledExpression = partShuttledExpressions.get(index);
+            expressionMap.put(partShouldShuttledExpressions.get(index), partShuttledExpression);
+            cachedShuttledExpressions.set(partShouldShuttledExprIndexes.get(index), partShuttledExpression);
+        }
+        return cachedShuttledExpressions;
+    }
+
+    /**
+     * Replace the slot in expressions with the lineage identifier from specified baseTable sets or target table types
+     * and cache
+     * example as following:
+     * select a + 10 as a1, d from (
+     * select b - 5 as a, d from table
+     * );
+     * op expression before is: a + 10 as a1, d. after is: b - 5 + 10, d
+     */
+    public static Expression shuttleExpressionWithLineage(Expression expression, Plan plan, BitSet tableBitSet,
+            Map<BitSet, Map<Expression, Expression>> expressionCache) {
+        if (expressionCache == null) {
+            return shuttleExpressionWithLineage(expression, plan, tableBitSet);
+        }
+        Map<Expression, Expression> expressionMap = expressionCache.get(tableBitSet);
+        if (expressionMap == null) {
+            expressionMap = new HashMap<>();
+            expressionCache.put(tableBitSet, expressionMap);
+        }
+        Expression cachedShuttledExpression = expressionMap.get(expression);
+        if (cachedShuttledExpression != null) {
+            return cachedShuttledExpression;
+        }
+        Expression shuttledExpression = ExpressionUtils.shuttleExpressionWithLineage(expression, plan, tableBitSet);
+        expressionMap.put(expression, shuttledExpression);
+        return shuttledExpression;
     }
 
     /**

@@ -160,6 +160,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                 viewToQuerySlotMapping,
                 queryTopPlanAndAggPair,
                 tempRewritedPlan,
+                cascadesContext,
                 materializationContext,
                 ExpressionRewriteMode.EXPRESSION_DIRECT,
                 ExpressionRewriteMode.EXPRESSION_ROLL_UP);
@@ -173,6 +174,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
             SlotMapping viewToQuerySlotMapping,
             Pair<Plan, LogicalAggregate<Plan>> queryTopPlanAndAggPair,
             Plan tempRewritedPlan,
+            CascadesContext cascadesContext,
             MaterializationContext materializationContext,
             ExpressionRewriteMode groupByMode,
             ExpressionRewriteMode aggregateFunctionMode) {
@@ -195,7 +197,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
             if (queryTopPlanFunctionSet.contains(topExpression)) {
                 // if agg function, try to roll up and rewrite
                 Expression rollupedExpression = tryRewriteExpression(queryStructInfo, topExpression,
-                        mvExprToMvScanExprQueryBased, aggregateFunctionMode, materializationContext,
+                        mvExprToMvScanExprQueryBased, aggregateFunctionMode, cascadesContext, materializationContext,
                         "Query function roll up fail",
                         () -> String.format("queryExpression = %s,\n mvExprToMvScanExprQueryBased = %s",
                                 topExpression, mvExprToMvScanExprQueryBased));
@@ -206,7 +208,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
             } else {
                 // if group by dimension, try to rewrite
                 Expression rewrittenGroupByExpression = tryRewriteExpression(queryStructInfo, topExpression,
-                        mvExprToMvScanExprQueryBased, groupByMode, materializationContext,
+                        mvExprToMvScanExprQueryBased, groupByMode, cascadesContext, materializationContext,
                         "View dimensions doesn't not cover the query dimensions",
                         () -> String.format("mvExprToMvScanExprQueryBased is %s,\n queryExpression is %s",
                                 mvExprToMvScanExprQueryBased, topExpression));
@@ -229,7 +231,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                     continue;
                 }
                 Expression rewrittenGroupByExpression = tryRewriteExpression(queryStructInfo, expression,
-                        mvExprToMvScanExprQueryBased, groupByMode, materializationContext,
+                        mvExprToMvScanExprQueryBased, groupByMode, cascadesContext, materializationContext,
                         "View dimensions doesn't not cover the query dimensions in bottom agg ",
                         () -> String.format("mvExprToMvScanExprQueryBased is %s,\n expression is %s",
                                 mvExprToMvScanExprQueryBased, expression));
@@ -253,7 +255,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                     for (Expression expression : groupingSet) {
                         Expression rewrittenGroupByExpression = tryRewriteExpression(queryStructInfo, expression,
                                 mvExprToMvScanExprQueryBased, ExpressionRewriteMode.EXPRESSION_DIRECT,
-                                materializationContext,
+                                cascadesContext, materializationContext,
                                 "View dimensions doesn't not cover the query group set dimensions",
                                 () -> String.format("mvExprToMvScanExprQueryBased is %s,\n queryExpression is %s",
                                         mvExprToMvScanExprQueryBased, expression));
@@ -313,14 +315,20 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
      */
     protected Expression tryRewriteExpression(StructInfo queryStructInfo, Expression queryExpression,
             Map<Expression, Expression> mvShuttledExprToMvScanExprQueryBased, ExpressionRewriteMode rewriteMode,
+            CascadesContext cascadesContext,
             MaterializationContext materializationContext, String summaryIfFail, Supplier<String> detailIfFail) {
         Expression queryFunctionShuttled = ExpressionUtils.shuttleExpressionWithLineage(
                 queryExpression,
                 queryStructInfo.getTopPlan(),
-                queryStructInfo.getTableBitSet());
+                queryStructInfo.getTableBitSet(),
+                cascadesContext.getStatementContext() == null ? null :
+                cascadesContext.getStatementContext().getQueryShuttledExpressionCache());
         AggregateExpressionRewriteContext expressionRewriteContext = new AggregateExpressionRewriteContext(
                 rewriteMode, mvShuttledExprToMvScanExprQueryBased, queryStructInfo.getTopPlan(),
-                queryStructInfo.getTableBitSet());
+                queryStructInfo.getTableBitSet(),
+                cascadesContext.getStatementContext() == null ? null :
+                        cascadesContext.getStatementContext().getQueryShuttledExpressionCache(),
+                materializationContext.getViewShuttledExpressionCache());
         Expression rewrittenExpression = queryFunctionShuttled.accept(AGGREGATE_EXPRESSION_REWRITER,
                 expressionRewriteContext);
         if (!expressionRewriteContext.isValid()) {
@@ -360,7 +368,9 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
         boolean canUnionRewrite = false;
         // Check the query plan group by expression contains partition col or not
         List<? extends Expression> groupByShuttledExpressions =
-                ExpressionUtils.shuttleExpressionWithLineage(groupByExpressions, queryPlan, new BitSet());
+                ExpressionUtils.shuttleExpressionWithLineage(groupByExpressions, queryPlan, new BitSet(),
+                        cascadesContext.getStatementContext() == null ? null
+                                : cascadesContext.getStatementContext().getQueryShuttledExpressionCache());
         for (Expression expression : groupByShuttledExpressions) {
             canUnionRewrite = !expression.collectToSet(expr -> expr instanceof SlotReference
                     && ((SlotReference) expr).isColumnFromTable()
@@ -428,13 +438,16 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
         LogicalAggregate<Plan> viewAggregate = viewTopPlanAndAggPair.value();
 
         Set<Expression> queryGroupByShuttledExpression = new HashSet<>(ExpressionUtils.shuttleExpressionWithLineage(
-                queryAggregate.getGroupByExpressions(), queryTopPlan, queryStructInfo.getTableBitSet()));
+                queryAggregate.getGroupByExpressions(), queryTopPlan, queryStructInfo.getTableBitSet(),
+                cascadesContext.getStatementContext() == null ? null :
+                cascadesContext.getStatementContext().getQueryShuttledExpressionCache()));
 
         // try to eliminate group by dimension by function dependency if group by expression is not in query
         Map<Expression, Expression> viewShuttledExpressionQueryBasedToGroupByExpressionMap = new HashMap<>();
         List<Expression> viewGroupByExpressions = viewAggregate.getGroupByExpressions();
         List<? extends Expression> viewGroupByShuttledExpressions = ExpressionUtils.shuttleExpressionWithLineage(
-                viewGroupByExpressions, viewTopPlan, viewStructInfo.getTableBitSet());
+                viewGroupByExpressions, viewTopPlan, viewStructInfo.getTableBitSet(),
+                materializationContext.getViewShuttledExpressionCache());
 
         for (int index = 0; index < viewGroupByExpressions.size(); index++) {
             Expression viewExpression = viewGroupByExpressions.get(index);
@@ -709,7 +722,8 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
                 Expression queryFunctionShuttled = ExpressionUtils.shuttleExpressionWithLineage(
                         aggregateFunction,
                         rewriteContext.getQueryTopPlan(),
-                        rewriteContext.getQueryTableBitSet());
+                        rewriteContext.getQueryTableBitSet(),
+                        rewriteContext.getQueryShuttledExpressionCache());
                 rewrittenFunction = rollup(aggregateFunction, queryFunctionShuttled,
                         rewriteContext.getMvExprToMvScanExprQueryBasedMapping());
                 if (rewrittenFunction == null) {
@@ -806,19 +820,33 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
      * AggregateExpressionRewriteContext
      */
     public static class AggregateExpressionRewriteContext {
+
+        // ExpressionUtils.shuttleExpressionWithLineage is expensive operation, so cache the mv original exprssion
+        // and it's shuttled expression
+        public final Map<BitSet, Map<Expression, Expression>> queryShuttledExpressionCache;
+        // ExpressionUtils.shuttleExpressionWithLineage is expensive operation, so cache the mv original exprssion
+        // and it's shuttled expression
+        public final Map<BitSet, Map<Expression, Expression>> viewShuttledExpressionCache;
         private boolean valid = true;
         private final ExpressionRewriteMode expressionRewriteMode;
         private final Map<Expression, Expression> mvExprToMvScanExprQueryBasedMapping;
         private final Plan queryTopPlan;
         private final BitSet queryTableBitSet;
 
+        /**
+         * AggregateExpressionRewriteContext construct method with shuttled expression cache
+         */
         public AggregateExpressionRewriteContext(ExpressionRewriteMode expressionRewriteMode,
                 Map<Expression, Expression> mvExprToMvScanExprQueryBasedMapping, Plan queryTopPlan,
-                BitSet queryTableBitSet) {
+                BitSet queryTableBitSet,
+                Map<BitSet, Map<Expression, Expression>> queryShuttledExpressionCache,
+                Map<BitSet, Map<Expression, Expression>> viewShuttledExpressionCache) {
             this.expressionRewriteMode = expressionRewriteMode;
             this.mvExprToMvScanExprQueryBasedMapping = mvExprToMvScanExprQueryBasedMapping;
             this.queryTopPlan = queryTopPlan;
             this.queryTableBitSet = queryTableBitSet;
+            this.queryShuttledExpressionCache = queryShuttledExpressionCache;
+            this.viewShuttledExpressionCache = viewShuttledExpressionCache;
         }
 
         public boolean isValid() {
@@ -843,6 +871,14 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
 
         public BitSet getQueryTableBitSet() {
             return queryTableBitSet;
+        }
+
+        public Map<BitSet, Map<Expression, Expression>> getQueryShuttledExpressionCache() {
+            return queryShuttledExpressionCache;
+        }
+
+        public Map<BitSet, Map<Expression, Expression>> getViewShuttledExpressionCache() {
+            return viewShuttledExpressionCache;
         }
 
         /**

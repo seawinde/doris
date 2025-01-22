@@ -128,6 +128,7 @@ public class MaterializedViewAggregateOnNoneAggregateRule extends AbstractMateri
                 viewToQuerySlotMapping,
                 queryTopPlanAndAggPair,
                 tempRewritedPlan,
+                cascadesContext,
                 materializationContext,
                 ExpressionRewriteMode.EXPRESSION_DIRECT_ALL,
                 ExpressionRewriteMode.EXPRESSION_DIRECT_ALL);

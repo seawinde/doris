@@ -198,7 +198,7 @@ class StructInfoMapTest extends SqlTestBase {
         BitSet mvMap = structInfoMap.getTableMaps().stream()
                 .filter(b -> b.cardinality() == 2)
                 .collect(Collectors.toList()).get(0);
-        StructInfo structInfo = structInfoMap.getStructInfo(c1, mvMap, root, null);
+        StructInfo structInfo = structInfoMap.getStructInfo(c1, mvMap, root, null, null);
         System.out.println(structInfo.getOriginalPlan().treeString());
         BitSet bitSet = new BitSet();
         for (CatalogRelation relation : structInfo.getRelations()) {

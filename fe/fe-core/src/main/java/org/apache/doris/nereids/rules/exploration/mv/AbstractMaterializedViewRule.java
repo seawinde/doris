@@ -155,7 +155,8 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
         List<StructInfo> validStructInfos = new ArrayList<>();
         // For every materialized view we should trigger refreshing struct info map
         List<StructInfo> uncheckedStructInfos = MaterializedViewUtils.extractStructInfo(queryPlan, queryPlan,
-                cascadesContext, materializedViewTableSet);
+                cascadesContext, materializedViewTableSet, cascadesContext.getStatementContext() == null
+                        ? null : cascadesContext.getStatementContext().queryShuttledExpressionCache);
         uncheckedStructInfos.forEach(queryStructInfo -> {
             boolean valid = checkQueryPattern(queryStructInfo, cascadesContext) && queryStructInfo.isValid();
             if (!valid) {
@@ -226,7 +227,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 continue;
             }
             SplitPredicate compensatePredicates = predicatesCompensate(queryStructInfo, viewStructInfo,
-                    viewToQuerySlotMapping, comparisonResult, cascadesContext);
+                    viewToQuerySlotMapping, comparisonResult, cascadesContext, materializationContext);
             // Can not compensate, bail out
             if (compensatePredicates.isInvalid()) {
                 materializationContext.recordFailReason(queryStructInfo,
@@ -572,7 +573,9 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
         // can not be represented by target expressions, return null.
         // generate target to target replacement expression mapping, and change target expression to source based
         List<? extends Expression> sourceShuttledExpressions = ExpressionUtils.shuttleExpressionWithLineage(
-                sourceExpressionsToWrite, sourcePlan, sourcePlanBitSet);
+                sourceExpressionsToWrite, sourcePlan, sourcePlanBitSet,
+                cascadesContext.getStatementContext() == null ? null :
+                cascadesContext.getStatementContext().getQueryShuttledExpressionCache());
         ExpressionMapping expressionMappingKeySourceBased = targetExpressionMapping.keyPermute(targetToSourceMapping);
         // target to target replacement expression mapping, because mv is 1:1 so get first element
         List<Map<Expression, Expression>> flattenExpressionMap = expressionMappingKeySourceBased.flattenMap();
@@ -769,7 +772,8 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             StructInfo viewStructInfo,
             SlotMapping viewToQuerySlotMapping,
             ComparisonResult comparisonResult,
-            CascadesContext cascadesContext
+            CascadesContext cascadesContext,
+            MaterializationContext materializationContext
     ) {
         // TODO: Use set of list? And consider view expr
         List<Expression> queryPulledUpExpressions = ImmutableList.copyOf(comparisonResult.getQueryExpressions());
@@ -793,13 +797,13 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             // try to use
             boolean valid = containsNullRejectSlot(requireNoNullableViewSlot,
                     queryStructInfo.getPredicates().getPulledUpPredicates(), queryToViewMapping, queryStructInfo,
-                    viewStructInfo, cascadesContext);
+                    viewStructInfo, cascadesContext, materializationContext);
             if (!valid) {
                 queryStructInfo = queryStructInfo.withPredicates(
                         queryStructInfo.getPredicates().merge(comparisonResult.getQueryAllPulledUpExpressions()));
                 valid = containsNullRejectSlot(requireNoNullableViewSlot,
                         queryStructInfo.getPredicates().getPulledUpPredicates(), queryToViewMapping,
-                        queryStructInfo, viewStructInfo, cascadesContext);
+                        queryStructInfo, viewStructInfo, cascadesContext, materializationContext);
             }
             if (!valid) {
                 return SplitPredicate.INVALID_INSTANCE;
@@ -831,7 +835,8 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             SlotMapping queryToViewMapping,
             StructInfo queryStructInfo,
             StructInfo viewStructInfo,
-            CascadesContext cascadesContext) {
+            CascadesContext cascadesContext,
+            MaterializationContext materializationContext) {
         Set<Expression> queryPulledUpPredicates = queryPredicates.stream()
                 .flatMap(expr -> ExpressionUtils.extractConjunction(expr).stream())
                 .map(expr -> {
@@ -860,7 +865,9 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
         }
         // query slot need shuttle to use table slot, avoid alias influence
         Set<Expression> queryUsedNeedRejectNullSlotsViewBased = ExpressionUtils.shuttleExpressionWithLineage(
-                        new ArrayList<>(queryNullRejectSlotSet), queryStructInfo.getTopPlan(), new BitSet()).stream()
+                        new ArrayList<>(queryNullRejectSlotSet), queryStructInfo.getTopPlan(), new BitSet(),
+                        cascadesContext.getStatementContext() == null ? null :
+                                cascadesContext.getStatementContext().getQueryShuttledExpressionCache()).stream()
                 .map(expr -> ExpressionUtils.replace(expr, queryToViewMapping.toSlotReferenceMap()))
                 .collect(Collectors.toSet());
         // view slot need shuttle to use table slot, avoid alias influence
@@ -868,7 +875,9 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
         for (Set<Slot> requireNullableSlots : requireNoNullableViewSlot) {
             shuttledRequireNoNullableViewSlot.add(
                     ExpressionUtils.shuttleExpressionWithLineage(new ArrayList<>(requireNullableSlots),
-                                    viewStructInfo.getTopPlan(), new BitSet()).stream().map(Slot.class::cast)
+                                    viewStructInfo.getTopPlan(), new BitSet(),
+                                    materializationContext.getViewShuttledExpressionCache()).stream()
+                            .map(Slot.class::cast)
                             .collect(Collectors.toSet()));
         }
         // query pulledUp predicates should have null reject predicates and contains any require noNullable slot

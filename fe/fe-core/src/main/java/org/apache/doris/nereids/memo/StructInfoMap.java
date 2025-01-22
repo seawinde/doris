@@ -21,6 +21,7 @@ import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.Pair;
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.rules.exploration.mv.StructInfo;
+import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalCatalogRelation;
 
@@ -54,7 +55,7 @@ public class StructInfoMap {
      * @return struct info or null if not found
      */
     public @Nullable StructInfo getStructInfo(CascadesContext cascadesContext, BitSet tableMap, Group group,
-            Plan originPlan) {
+            Plan originPlan, Map<BitSet, Map<Expression, Expression>> shuttledExpressionCache) {
         StructInfo structInfo = infoMap.get(tableMap);
         if (structInfo != null) {
             return structInfo;
@@ -67,7 +68,7 @@ public class StructInfoMap {
             Pair<GroupExpression, List<BitSet>> groupExpressionBitSetPair = getGroupExpressionWithChildren(
                     tableMap);
             structInfo = constructStructInfo(groupExpressionBitSetPair.first, groupExpressionBitSetPair.second,
-                    tableMap, originPlan, cascadesContext);
+                    tableMap, originPlan, cascadesContext, shuttledExpressionCache);
             infoMap.put(tableMap, structInfo);
         }
         return structInfo;
@@ -90,11 +91,12 @@ public class StructInfoMap {
     }
 
     private StructInfo constructStructInfo(GroupExpression groupExpression, List<BitSet> children,
-            BitSet tableMap, Plan originPlan, CascadesContext cascadesContext) {
+            BitSet tableMap, Plan originPlan, CascadesContext cascadesContext,
+            Map<BitSet, Map<Expression, Expression>> shuttledExpressionCache) {
         // this plan is not origin plan, should record origin plan in struct info
         Plan plan = constructPlan(groupExpression, children, tableMap);
-        return originPlan == null ? StructInfo.of(plan, cascadesContext)
-                : StructInfo.of(plan, originPlan, cascadesContext);
+        return originPlan == null ? StructInfo.of(plan, cascadesContext, shuttledExpressionCache)
+                : StructInfo.of(plan, originPlan, cascadesContext, shuttledExpressionCache);
     }
 
     private Plan constructPlan(GroupExpression groupExpression, List<BitSet> children, BitSet tableMap) {

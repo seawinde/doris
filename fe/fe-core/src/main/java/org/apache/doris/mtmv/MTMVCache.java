@@ -133,7 +133,7 @@ public class MTMVCache {
         // Construct structInfo once for use later
         Optional<StructInfo> structInfoOptional = MaterializationContext.constructStructInfo(mvPlan, originPlan,
                 planner.getCascadesContext(),
-                new BitSet());
+                new BitSet(),  null);
         return new MTMVCache(mvPlan, originPlan, planner.getAnalyzedPlan(), needCost
                 ? planner.getCascadesContext().getMemo().getRoot().getStatistics() : null,
                 structInfoOptional.orElse(null));

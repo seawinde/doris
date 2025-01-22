@@ -33,7 +33,6 @@ import org.apache.doris.nereids.rules.exploration.mv.Predicates.SplitPredicate;
 import org.apache.doris.nereids.trees.copier.DeepCopierContext;
 import org.apache.doris.nereids.trees.copier.LogicalPlanDeepCopier;
 import org.apache.doris.nereids.trees.expressions.EqualTo;
-import org.apache.doris.nereids.trees.expressions.ExprId;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
@@ -67,7 +66,6 @@ import org.apache.doris.nereids.util.ExpressionUtils;
 
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Sets;
 
@@ -133,9 +131,9 @@ public class StructInfo {
     // this is for building LogicalCompatibilityContext later.
     private final Map<ExpressionPosition, Map<Expression, Expression>> expressionToShuttledExpressionToMap;
 
-    // Record the exprId and the corresponding expr map, this is used by expression shuttled
-    private final Map<ExprId, Expression> namedExprIdAndExprMapping;
     private final List<? extends Expression> planOutputShuttledExpressions;
+
+    private final Map<BitSet, Map<Expression, Expression>> shuttledExpressionCache;
 
     /**
      * The construct method for StructInfo
@@ -147,11 +145,11 @@ public class StructInfo {
             Map<ExpressionPosition, Multimap<Expression, Pair<Expression, HyperElement>>>
                     shuttledExpressionsToExpressionsMap,
             Map<ExpressionPosition, Map<Expression, Expression>> expressionToShuttledExpressionToMap,
-            Map<ExprId, Expression> namedExprIdAndExprMapping,
             BitSet tableIdSet,
             SplitPredicate splitPredicate,
             EquivalenceClass equivalenceClass,
-            List<? extends Expression> planOutputShuttledExpressions) {
+            List<? extends Expression> planOutputShuttledExpressions,
+            Map<BitSet, Map<Expression, Expression>> shuttledExpressionCache) {
         this.originalPlan = originalPlan;
         this.originalPlanId = originalPlanId;
         this.hyperGraph = hyperGraph;
@@ -166,8 +164,8 @@ public class StructInfo {
         this.equivalenceClass = equivalenceClass;
         this.shuttledExpressionsToExpressionsMap = shuttledExpressionsToExpressionsMap;
         this.expressionToShuttledExpressionToMap = expressionToShuttledExpressionToMap;
-        this.namedExprIdAndExprMapping = namedExprIdAndExprMapping;
         this.planOutputShuttledExpressions = planOutputShuttledExpressions;
+        this.shuttledExpressionCache = shuttledExpressionCache;
     }
 
     /**
@@ -177,8 +175,8 @@ public class StructInfo {
         return new StructInfo(this.originalPlan, this.originalPlanId, this.hyperGraph, this.valid, this.topPlan,
                 this.bottomPlan, this.relations, this.relationIdStructInfoNodeMap, predicates,
                 this.shuttledExpressionsToExpressionsMap, this.expressionToShuttledExpressionToMap,
-                this.namedExprIdAndExprMapping, this.tableBitSet,
-                null, null, this.planOutputShuttledExpressions);
+                 this.tableBitSet, null, null, this.planOutputShuttledExpressions,
+                this.shuttledExpressionCache);
     }
 
     /**
@@ -188,8 +186,8 @@ public class StructInfo {
         return new StructInfo(this.originalPlan, this.originalPlanId, this.hyperGraph, this.valid, this.topPlan,
                 this.bottomPlan, this.relations, this.relationIdStructInfoNodeMap, this.predicates,
                 this.shuttledExpressionsToExpressionsMap, this.expressionToShuttledExpressionToMap,
-                this.namedExprIdAndExprMapping, tableBitSet,
-                this.splitPredicate, this.equivalenceClass, this.planOutputShuttledExpressions);
+                tableBitSet, this.splitPredicate, this.equivalenceClass, this.planOutputShuttledExpressions,
+                this.shuttledExpressionCache);
     }
 
     private static boolean collectStructInfoFromGraph(HyperGraph hyperGraph,
@@ -197,12 +195,11 @@ public class StructInfo {
             Map<ExpressionPosition, Multimap<Expression, Pair<Expression, HyperElement>>>
                     shuttledExpressionsToExpressionsMap,
             Map<ExpressionPosition, Map<Expression, Expression>> expressionToShuttledExpressionToMap,
-            Map<ExprId, Expression> namedExprIdAndExprMapping,
             List<CatalogRelation> relations,
             Map<RelationId, StructInfoNode> relationIdStructInfoNodeMap,
             BitSet hyperTableBitSet,
-            CascadesContext cascadesContext) {
-
+            CascadesContext cascadesContext,
+            Map<BitSet, Map<Expression, Expression>> shuttledExpressionCache) {
         // Collect relations from hyper graph which in the bottom plan firstly
         hyperGraph.getNodes().forEach(node -> {
             // plan relation collector and set to map
@@ -215,22 +212,16 @@ public class StructInfo {
             // plan relation collector and set to map
             StructInfoNode structInfoNode = (StructInfoNode) node;
             // record expressions in node
-            if (structInfoNode.getExpressions() != null) {
-                structInfoNode.getExpressions().forEach(expression -> {
-                    ExpressionLineageReplacer.ExpressionReplaceContext replaceContext =
-                            new ExpressionLineageReplacer.ExpressionReplaceContext(
-                                    Lists.newArrayList(expression), ImmutableSet.of(),
-                                    ImmutableSet.of(), new BitSet());
-                    structInfoNode.getPlan().accept(ExpressionLineageReplacer.INSTANCE, replaceContext);
-                    // Replace expressions by expression map
-                    List<Expression> replacedExpressions = replaceContext.getReplacedExpressions();
+            List<Expression> nodeExpressions = structInfoNode.getExpressions();
+            if (nodeExpressions != null) {
+                List<? extends Expression> shuttledExpressions = ExpressionUtils.shuttleExpressionWithLineage(
+                        nodeExpressions, structInfoNode.getPlan(),
+                        new BitSet(), shuttledExpressionCache);
+                for (int index = 0; index < nodeExpressions.size(); index++) {
                     putShuttledExpressionToExpressionsMap(shuttledExpressionsToExpressionsMap,
                             expressionToShuttledExpressionToMap,
-                            ExpressionPosition.NODE, replacedExpressions.get(0), expression, node);
-                    // Record this, will be used in top level expression shuttle later, see the method
-                    // ExpressionLineageReplacer#visitGroupPlan
-                    namedExprIdAndExprMapping.putAll(replaceContext.getExprIdExpressionMap());
-                });
+                            ExpressionPosition.NODE, shuttledExpressions.get(index), nodeExpressions.get(index), node);
+                }
             }
             // every node should only have one relation, this is for LogicalCompatibilityContext
             if (!nodeRelations.isEmpty()) {
@@ -242,7 +233,6 @@ public class StructInfo {
             List<? extends Expression> joinConjunctExpressions = edge.getExpressions();
             // shuttle expression in edge for the build of LogicalCompatibilityContext later.
             // Record the exprId to expr map in the processing to strut info
-            // TODO get exprId to expr map when complex project is ready in join dege
             ExpressionLineageReplacer.ExpressionReplaceContext replaceContext =
                     new ExpressionLineageReplacer.ExpressionReplaceContext(
                             joinConjunctExpressions.stream().map(expr -> (Expression) expr)
@@ -250,38 +240,37 @@ public class StructInfo {
                             ImmutableSet.of(), ImmutableSet.of(), new BitSet());
             topPlan.accept(ExpressionLineageReplacer.INSTANCE, replaceContext);
             // Replace expressions by expression map
-            List<Expression> replacedExpressions = replaceContext.getReplacedExpressions();
-            for (int i = 0; i < replacedExpressions.size(); i++) {
+            List<? extends Expression> shuttledExpressions = ExpressionUtils.shuttleExpressionWithLineage(
+                    joinConjunctExpressions, topPlan, new BitSet(), shuttledExpressionCache);
+            for (int i = 0; i < shuttledExpressions.size(); i++) {
                 putShuttledExpressionToExpressionsMap(shuttledExpressionsToExpressionsMap,
                         expressionToShuttledExpressionToMap,
-                        ExpressionPosition.JOIN_EDGE, replacedExpressions.get(i), joinConjunctExpressions.get(i),
-                        edge);
+                        ExpressionPosition.JOIN_EDGE, shuttledExpressions.get(i),
+                        joinConjunctExpressions.get(i), edge);
             }
-            // Record this, will be used in top level expression shuttle later, see the method
-            // ExpressionLineageReplacer#visitGroupPlan
-            namedExprIdAndExprMapping.putAll(replaceContext.getExprIdExpressionMap());
         }
         // Collect expression from where in hyper graph
         hyperGraph.getFilterEdges().forEach(filterEdge -> {
             List<? extends Expression> filterExpressions = filterEdge.getExpressions();
-            filterExpressions.forEach(predicate -> {
-                // this is used for LogicalCompatibilityContext
-                ExpressionUtils.extractConjunction(predicate).forEach(expr ->
-                        putShuttledExpressionToExpressionsMap(shuttledExpressionsToExpressionsMap,
-                                expressionToShuttledExpressionToMap,
-                                ExpressionPosition.FILTER_EDGE,
-                                ExpressionUtils.shuttleExpressionWithLineage(predicate, topPlan, new BitSet()),
-                                predicate, filterEdge));
-            });
+            List<? extends Expression> shuttledExpressions = ExpressionUtils.shuttleExpressionWithLineage(
+                    filterExpressions, topPlan, new BitSet(), shuttledExpressionCache);
+            for (int i = 0; i < shuttledExpressions.size(); i++) {
+                putShuttledExpressionToExpressionsMap(shuttledExpressionsToExpressionsMap,
+                        expressionToShuttledExpressionToMap,
+                        ExpressionPosition.FILTER_EDGE, shuttledExpressions.get(i),
+                        filterExpressions.get(i), filterEdge);
+            }
         });
         return true;
     }
 
     // derive some useful predicate by predicates
-    private static Pair<SplitPredicate, EquivalenceClass> predicatesDerive(Predicates predicates, Plan originalPlan) {
+    private static Pair<SplitPredicate, EquivalenceClass> predicatesDerive(Predicates predicates, Plan originalPlan,
+            Map<BitSet, Map<Expression, Expression>> shuttledExpressionCache) {
         // construct equivalenceClass according to equals predicates
         List<Expression> shuttledExpression = ExpressionUtils.shuttleExpressionWithLineage(
-                        new ArrayList<>(predicates.getPulledUpPredicates()), originalPlan, new BitSet()).stream()
+                        new ArrayList<>(predicates.getPulledUpPredicates()), originalPlan, new BitSet(),
+                        shuttledExpressionCache).stream()
                 .map(Expression.class::cast)
                 .collect(Collectors.toList());
         SplitPredicate splitPredicate = Predicates.splitPredicates(ExpressionUtils.and(shuttledExpression));
@@ -304,15 +293,17 @@ public class StructInfo {
      * Build Struct info from plan.
      * Maybe return multi structInfo when original plan already be rewritten by mv
      */
-    public static StructInfo of(Plan originalPlan, CascadesContext cascadesContext) {
-        return of(originalPlan, originalPlan, cascadesContext);
+    public static StructInfo of(Plan originalPlan, CascadesContext cascadesContext,
+            Map<BitSet, Map<Expression, Expression>> shuttledExpressionCache) {
+        return of(originalPlan, originalPlan, cascadesContext, shuttledExpressionCache);
     }
 
     /**
      * Build Struct info from plan.
      * Maybe return multi structInfo when original plan already be rewritten by mv
      */
-    public static StructInfo of(Plan derivedPlan, Plan originalPlan, CascadesContext cascadesContext) {
+    public static StructInfo of(Plan derivedPlan, Plan originalPlan, CascadesContext cascadesContext,
+            Map<BitSet, Map<Expression, Expression>> shuttledExpressionCache) {
         // Split plan by the boundary which contains multi child
         LinkedHashSet<Class<? extends Plan>> set = Sets.newLinkedHashSet();
         set.add(LogicalJoin.class);
@@ -320,15 +311,16 @@ public class StructInfo {
         // if single table without join, the bottom is
         derivedPlan.accept(PLAN_SPLITTER, planSplitContext);
         return StructInfo.of(originalPlan, planSplitContext.getTopPlan(), planSplitContext.getBottomPlan(),
-                HyperGraph.builderForMv(planSplitContext.getBottomPlan()).build(), cascadesContext);
+                HyperGraph.builderForMv(planSplitContext.getBottomPlan()).build(), cascadesContext,
+                shuttledExpressionCache);
     }
 
     /**
      * The construct method for init StructInfo
      */
     public static StructInfo of(Plan originalPlan, @Nullable Plan topPlan, @Nullable Plan bottomPlan,
-            HyperGraph hyperGraph,
-            CascadesContext cascadesContext) {
+            HyperGraph hyperGraph, CascadesContext cascadesContext,
+            Map<BitSet, Map<Expression, Expression>> shuttledExpressionCache) {
         ObjectId originalPlanId = originalPlan.getGroupExpression()
                 .map(GroupExpression::getId).orElseGet(() -> new ObjectId(-1));
         // if any of topPlan or bottomPlan is null, split the top plan to two parts by join node
@@ -345,16 +337,11 @@ public class StructInfo {
         Map<RelationId, StructInfoNode> relationIdStructInfoNodeMap = new LinkedHashMap<>();
         Map<ExpressionPosition, Multimap<Expression, Pair<Expression, HyperElement>>>
                 shuttledHashConjunctsToConjunctsMap = new LinkedHashMap<>();
-        Map<ExprId, Expression> namedExprIdAndExprMapping = new LinkedHashMap<>();
         BitSet tableBitSet = new BitSet();
         Map<ExpressionPosition, Map<Expression, Expression>> expressionToShuttledExpressionToMap = new HashMap<>();
         boolean valid = collectStructInfoFromGraph(hyperGraph, topPlan, shuttledHashConjunctsToConjunctsMap,
-                expressionToShuttledExpressionToMap,
-                namedExprIdAndExprMapping,
-                relationList,
-                relationIdStructInfoNodeMap,
-                tableBitSet,
-                cascadesContext);
+                expressionToShuttledExpressionToMap, relationList, relationIdStructInfoNodeMap,
+                tableBitSet, cascadesContext, shuttledExpressionCache);
         valid = valid
                 && hyperGraph.getNodes().stream().allMatch(n -> ((StructInfoNode) n).getExpressions() != null);
         // if relationList has any relation which contains table operator,
@@ -368,12 +355,12 @@ public class StructInfo {
         Predicates predicates = Predicates.of(topPlanPredicates);
         // this should use the output of originalPlan to make sure the output right order
         List<? extends Expression> planOutputShuttledExpressions =
-                ExpressionUtils.shuttleExpressionWithLineage(originalPlan.getOutput(), originalPlan, new BitSet());
+                ExpressionUtils.shuttleExpressionWithLineage(originalPlan.getOutput(), originalPlan, new BitSet(),
+                        shuttledExpressionCache);
         return new StructInfo(originalPlan, originalPlanId, hyperGraph, valid, topPlan, bottomPlan,
                 relationList, relationIdStructInfoNodeMap, predicates, shuttledHashConjunctsToConjunctsMap,
-                expressionToShuttledExpressionToMap,
-                namedExprIdAndExprMapping, tableBitSet, null, null,
-                planOutputShuttledExpressions);
+                expressionToShuttledExpressionToMap, tableBitSet, null, null,
+                planOutputShuttledExpressions, shuttledExpressionCache);
     }
 
     public List<CatalogRelation> getRelations() {
@@ -392,12 +379,17 @@ public class StructInfo {
         return hyperGraph;
     }
 
+    public Map<BitSet, Map<Expression, Expression>> getShuttledExpressionCache() {
+        return shuttledExpressionCache;
+    }
+
     /**
      * lazy init for performance
      */
     public SplitPredicate getSplitPredicate() {
         if (this.splitPredicate == null && this.predicates != null) {
-            Pair<SplitPredicate, EquivalenceClass> derivedPredicates = predicatesDerive(this.predicates, topPlan);
+            Pair<SplitPredicate, EquivalenceClass> derivedPredicates = predicatesDerive(this.predicates, topPlan,
+                    this.shuttledExpressionCache);
             this.splitPredicate = derivedPredicates.key();
             this.equivalenceClass = derivedPredicates.value();
         }
@@ -409,7 +401,8 @@ public class StructInfo {
      */
     public EquivalenceClass getEquivalenceClass() {
         if (this.equivalenceClass == null && this.predicates != null) {
-            Pair<SplitPredicate, EquivalenceClass> derivedPredicates = predicatesDerive(this.predicates, topPlan);
+            Pair<SplitPredicate, EquivalenceClass> derivedPredicates = predicatesDerive(this.predicates, this.topPlan,
+                    this.shuttledExpressionCache);
             this.splitPredicate = derivedPredicates.key();
             this.equivalenceClass = derivedPredicates.value();
         }
@@ -471,10 +464,6 @@ public class StructInfo {
 
     public ObjectId getOriginalPlanId() {
         return originalPlanId;
-    }
-
-    public Map<ExprId, Expression> getNamedExprIdAndExprMapping() {
-        return namedExprIdAndExprMapping;
     }
 
     public BitSet getTableBitSet() {

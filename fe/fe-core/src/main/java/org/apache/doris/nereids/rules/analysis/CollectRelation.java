@@ -208,7 +208,7 @@ public class CollectRelation implements AnalysisRuleFactory {
                 try {
                     for (BaseTableInfo baseTableInfo : mtmv.getRelation().getBaseTables()) {
                         if (LOG.isDebugEnabled()) {
-                            LOG.info("mtmv {} related base table include {}", new BaseTableInfo(mtmv), baseTableInfo);
+                            LOG.debug("mtmv {} related base table include {}", new BaseTableInfo(mtmv), baseTableInfo);
                         }
                         try {
                             cascadesContext.getStatementContext().getAndCacheTable(baseTableInfo.toList(),

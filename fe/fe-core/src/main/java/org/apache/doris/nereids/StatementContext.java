@@ -103,6 +103,10 @@ public class StatementContext implements Closeable {
         MTMV
     }
 
+    // ExpressionUtils.shuttleExpressionWithLineage is expensive operation, so cache the mv original exprssion
+    // and it's shuttled expression
+    public final Map<BitSet, Map<Expression, Expression>> queryShuttledExpressionCache = new HashMap<>();
+
     private ConnectContext connectContext;
 
     private final Stopwatch stopwatch = Stopwatch.createUnstarted();
@@ -772,5 +776,9 @@ public class StatementContext implements Closeable {
 
     public void setPrivChecked(boolean privChecked) {
         this.privChecked = privChecked;
+    }
+
+    public Map<BitSet, Map<Expression, Expression>> getQueryShuttledExpressionCache() {
+        return queryShuttledExpressionCache;
     }
 }

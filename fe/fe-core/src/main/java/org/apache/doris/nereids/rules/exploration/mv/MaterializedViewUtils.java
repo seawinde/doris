@@ -189,7 +189,7 @@ public class MaterializedViewUtils {
      * @param originalPlan original plan, the output is right
      */
     public static List<StructInfo> extractStructInfo(Plan plan, Plan originalPlan, CascadesContext cascadesContext,
-            BitSet materializedViewTableSet) {
+            BitSet materializedViewTableSet, Map<BitSet, Map<Expression, Expression>> shuttledExpressionCache) {
         // If plan belong to some group, construct it with group struct info
         if (plan.getGroupExpression().isPresent()) {
             Group ownerGroup = plan.getGroupExpression().get().getOwnerGroup();
@@ -208,7 +208,7 @@ public class MaterializedViewUtils {
                         continue;
                     }
                     StructInfo structInfo = structInfoMap.getStructInfo(cascadesContext,
-                            queryTableSet, ownerGroup, originalPlan);
+                            queryTableSet, ownerGroup, originalPlan, shuttledExpressionCache);
                     if (structInfo != null) {
                         structInfosBuilder.add(structInfo);
                     }
@@ -217,7 +217,7 @@ public class MaterializedViewUtils {
             return structInfosBuilder.build();
         }
         // if plan doesn't belong to any group, construct it directly
-        return ImmutableList.of(StructInfo.of(plan, originalPlan, cascadesContext));
+        return ImmutableList.of(StructInfo.of(plan, originalPlan, cascadesContext, shuttledExpressionCache));
     }
 
     /**
