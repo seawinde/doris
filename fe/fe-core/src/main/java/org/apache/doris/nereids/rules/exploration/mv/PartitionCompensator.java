@@ -21,6 +21,7 @@ import org.apache.doris.catalog.MTMV;
 import org.apache.doris.catalog.Partition;
 import org.apache.doris.catalog.PartitionInfo;
 import org.apache.doris.catalog.PartitionType;
+import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Pair;
 import org.apache.doris.mtmv.BaseTableInfo;
@@ -30,6 +31,7 @@ import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.RelationId;
 import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
+import org.apache.doris.qe.ConnectContext;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -57,10 +59,10 @@ public class PartitionCompensator {
     /**
      * Get table used partitions by the table full qualifiers
      * */
-    public static Set<String> getQueryUsedPartition(
-            CascadesContext cascadesContext,
+    public static Set<String> getQueryTableUsedPartition(
+            List<String> targetTableFullQualifiers,
             StructInfo queryStructInfo,
-            List<String> targetTableFullQualifiers) {
+            CascadesContext cascadesContext) {
         Multimap<List<String>, Pair<RelationId, Set<String>>> tableUsedPartitionNameMap
                 = cascadesContext.getStatementContext().getTableUsedPartitionNameMap();
         Collection<Pair<RelationId, Set<String>>> tableUsedPartitions =
@@ -163,7 +165,50 @@ public class PartitionCompensator {
                 && (!invalidPartitions.key().isEmpty() || !invalidPartitions.value().isEmpty());
     }
 
+    /**
+     * Check if need union compensate or not
+     */
+    public static boolean needUnionRewrite(MaterializationContext materializationContext) {
+        if (!(materializationContext instanceof AsyncMaterializationContext)) {
+            return false;
+        }
+        MTMV mtmv = ((AsyncMaterializationContext) materializationContext).getMtmv();
+        PartitionType type = mtmv.getPartitionInfo().getType();
+        BaseTableInfo relatedTableInfo = mtmv.getMvPartitionInfo().getRelatedTableInfo();
+        return !PartitionType.UNPARTITIONED.equals(type) && relatedTableInfo != null;
+    }
+
     public static boolean isAllPartition(Pair<RelationId, Set<String>> usedPartition) {
         return ALL_PARTITIONS.equals(usedPartition);
+    }
+
+    /**
+     * Get query used partitions
+     * this is calculated from tableUsedPartitionNameMap and tables in statementContext
+     * */
+    public static Map<List<String>, Set<String>> getQueryUsedPartitions(ConnectContext ctx) {
+        // get table used partitions
+        // if table is not in statementContext().getTables() which means the table is partition prune as empty relation
+        Multimap<List<String>, Pair<RelationId, Set<String>>> tableUsedPartitionNameMap = ctx.getStatementContext()
+                .getTableUsedPartitionNameMap();
+        // if value is empty, means query no partitions
+        // if value is null, means query all partitions
+        // if value is not empty, means query some partitions
+        Map<List<String>, Set<String>> queryUsedRelatedTablePartitionsMap = new HashMap<>();
+        for (Map.Entry<List<String>, TableIf> tableIfEntry : ctx.getStatementContext().getTables().entrySet()) {
+            Set<String> usedPartitionSet = new HashSet<>();
+            if (!tableUsedPartitionNameMap.get(tableIfEntry.getKey()).isEmpty()) {
+                for (Pair<RelationId, Set<String>> partitionPair
+                        : tableUsedPartitionNameMap.get(tableIfEntry.getKey())) {
+                    if (PartitionCompensator.isAllPartition(partitionPair)) {
+                        queryUsedRelatedTablePartitionsMap.put(tableIfEntry.getKey(), null);
+                        break;
+                    }
+                    usedPartitionSet.addAll(partitionPair.value());
+                }
+            }
+            queryUsedRelatedTablePartitionsMap.put(tableIfEntry.getKey(), usedPartitionSet);
+        }
+        return queryUsedRelatedTablePartitionsMap;
     }
 }

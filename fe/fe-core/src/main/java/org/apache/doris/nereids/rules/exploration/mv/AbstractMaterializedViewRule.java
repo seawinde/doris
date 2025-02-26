@@ -269,15 +269,12 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 continue;
             }
             Pair<Map<BaseTableInfo, Set<String>>, Map<BaseTableInfo, Set<String>>> invalidPartitions;
-            if (materializationContext instanceof AsyncMaterializationContext) {
+            if (PartitionCompensator.needUnionRewrite(materializationContext)) {
                 MTMV mtmv = ((AsyncMaterializationContext) materializationContext).getMtmv();
                 BaseTableInfo relatedTableInfo = mtmv.getMvPartitionInfo().getRelatedTableInfo();
-                if (relatedTableInfo == null) {
-                    continue;
-                }
                 try {
-                    Set<String> queryUsedPartition = PartitionCompensator.getQueryUsedPartition(cascadesContext,
-                            queryStructInfo, relatedTableInfo.toList());
+                    Set<String> queryUsedPartition = PartitionCompensator.getQueryTableUsedPartition(
+                            relatedTableInfo.toList(), queryStructInfo, cascadesContext);
                     if (queryUsedPartition.isEmpty()) {
                         materializationContext.recordFailReason(queryStructInfo,
                                 String.format("queryUsedPartition is empty, table is %s, sql hash is %s",
