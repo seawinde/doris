@@ -166,7 +166,7 @@ public class Group {
     public GroupExpression getLogicalExpressionWithoutCheck() {
         Preconditions.checkArgument(!logicalExpressions.isEmpty(),
                 "There should be more than one Logical Expression in Group");
-        return logicalExpressions.get(0);
+        return logicalExpressions.get(logicalExpressions.size() - 1);
     }
 
     public List<GroupExpression> getPhysicalExpressions() {

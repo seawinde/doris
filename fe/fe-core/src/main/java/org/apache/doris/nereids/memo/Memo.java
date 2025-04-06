@@ -299,7 +299,7 @@ public class Memo {
      * @return plan
      */
     public Plan copyOut(Group group, boolean includeGroupExpression) {
-        GroupExpression logicalExpression = group.getLogicalExpression();
+        GroupExpression logicalExpression = group.getLogicalExpressionWithoutCheck();
         return copyOut(logicalExpression, includeGroupExpression);
     }
 

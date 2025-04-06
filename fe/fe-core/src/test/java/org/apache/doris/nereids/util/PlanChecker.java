@@ -69,6 +69,7 @@ import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -454,9 +455,9 @@ public class PlanChecker {
     }
 
     public PlanChecker deriveStats() {
-        cascadesContext.pushJob(
-                new DeriveStatsJob(cascadesContext.getMemo().getRoot().getLogicalExpression(),
-                        cascadesContext.getCurrentJobContext()));
+        cascadesContext.getMemo().getRoot().getLogicalExpressions().forEach(groupExpression ->
+                cascadesContext.pushJob(new DeriveStatsJob(groupExpression, cascadesContext.getCurrentJobContext())));
+
         cascadesContext.getJobScheduler().executeJobPool(cascadesContext);
         return this;
     }
@@ -479,6 +480,15 @@ public class PlanChecker {
         Memo memo = cascadesContext.getMemo();
         checkSlotFromChildren(memo);
         assertMatches(memo, () -> MatchingUtils.topDownFindMatching(memo.getRoot(), patternDesc.pattern));
+        return this;
+    }
+
+    public PlanChecker anyMatches(PatternDescriptor<? extends Plan> patternDesc) {
+        Set<Boolean> matchResult = new HashSet<>();
+        Memo memo = cascadesContext.getMemo();
+        checkSlotFromChildren(memo);
+        matchResult.add(MatchingUtils.topDownFindMatching(memo.getRoot(), patternDesc.pattern));
+        assertMatches(memo, () -> matchResult.contains(true));
         return this;
     }
 
