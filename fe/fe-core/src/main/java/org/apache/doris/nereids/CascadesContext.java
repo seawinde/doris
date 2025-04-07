@@ -85,6 +85,7 @@ public class CascadesContext implements ScheduleContext {
     private Optional<RootRewriteJobContext> currentRootRewriteJobContext;
     // in optimize stage, the plan will storage in the memo
     private Memo memo;
+    private Memo multiPlanMemo;
     private final StatementContext statementContext;
 
     private CTEContext cteContext;
@@ -227,24 +228,29 @@ public class CascadesContext implements ScheduleContext {
     public void toMemo() {
         List<Plan> tmpPlanForLaterMvRewrite = this.getStatementContext().getTmpPlanForLaterMvRewrite();
         // only consider result sink to avoid Insert a plan into targetGroup but differ in logical properties
-        if (!tmpPlanForLaterMvRewrite.isEmpty() && plan instanceof LogicalResultSink) {
+        boolean initMultiPlanMemo = !getConnectContext().getStatementContext().getPlannerHooks().isEmpty()
+                && !tmpPlanForLaterMvRewrite.isEmpty() && plan instanceof LogicalResultSink
+                && tmpPlanForLaterMvRewrite.stream()
+                .anyMatch(tmpPlan -> plan.getLogicalProperties().equals(tmpPlan.getLogicalProperties()))
+                && !(getConnectContext().getSessionVariable().enableDPHypOptimizer || getStatementContext().isDpHyp());
+        if (initMultiPlanMemo) {
             // copy tmp plan for mv rewrite firstly
-            this.memo = new Memo(getConnectContext(), tmpPlanForLaterMvRewrite.get(0));
-            if (tmpPlanForLaterMvRewrite.size() > 1) {
-                for (int i = 1; i < tmpPlanForLaterMvRewrite.size(); i++) {
-                    this.memo.copyIn(tmpPlanForLaterMvRewrite.get(i), this.memo.getRoot(), false);
-                }
-            }
-            if (!plan.getLogicalProperties().equals(this.memo.getRoot().getLogicalProperties())) {
+            for (Plan tmpPlan : tmpPlanForLaterMvRewrite) {
                 // aggregate_without_roll_up query_13_0 cause error into targetGroup but differ in logical properties
                 // tmp rewritten plan output is different from final rewritten plan output
-                this.memo = new Memo(getConnectContext(), plan);
-            } else {
-                this.memo.copyIn(plan, this.memo.getRoot(), false);
+                if (!tmpPlan.getLogicalProperties().equals(plan.getLogicalProperties())) {
+                    continue;
+                }
+                if (this.multiPlanMemo == null) {
+                    this.multiPlanMemo = new Memo(getConnectContext(), tmpPlan);
+                } else {
+                    this.multiPlanMemo.copyIn(tmpPlan, this.multiPlanMemo.getRoot(), false);
+                }
             }
-        } else {
-            this.memo = new Memo(getConnectContext(), plan);
+            // copy the rbo final rbo plan into memo
+            this.multiPlanMemo.copyIn(plan, this.multiPlanMemo.getRoot(), false);
         }
+        this.memo = new Memo(getConnectContext(), plan);
     }
 
     public TableCollectAndHookInitializer newTableCollector() {
@@ -261,7 +267,7 @@ public class CascadesContext implements ScheduleContext {
     }
 
     public Memo getMemo() {
-        return memo;
+        return multiPlanMemo == null ? memo : multiPlanMemo;
     }
 
     public void releaseMemo() {

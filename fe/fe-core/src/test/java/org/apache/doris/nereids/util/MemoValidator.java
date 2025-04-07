@@ -43,14 +43,11 @@ public class MemoValidator {
     public final IdentityHashMap<GroupExpression, Void> visitedExpressions = new IdentityHashMap<>();
 
     public static MemoValidator validateInitState(Memo memo, Plan initPlan) {
-        Assertions.assertEquals(memo.getGroups().size(), memo.getGroupExpressions().size());
-
         for (Group group : memo.getGroups()) {
-            // every group has one logical groupExpression and no physical groupExpression
-            Assertions.assertEquals(1, group.getLogicalExpressions().size());
+            // every group has no physical groupExpression
             Assertions.assertEquals(0, group.getPhysicalExpressions().size());
         }
-
+        // TODO: 2025/4/7 Add cycle detect method for multi plan in memo
         MemoValidator validator = validate(memo);
         if (initPlan != null) {
             if (initPlan instanceof UnboundResultSink || initPlan instanceof LogicalSelectHint) {
@@ -61,7 +58,7 @@ public class MemoValidator {
         return validator;
     }
 
-    /* basic validate */
+    /* basic validate memo init state*/
     public static MemoValidator validate(Memo memo) {
         MemoValidator memoValidator = new MemoValidator();
 
@@ -78,7 +75,6 @@ public class MemoValidator {
                     "Exist unreachable groupExpression: " + entry.getKey() + ", groupId: "
                             + entry.getKey().getOwnerGroup().getGroupId());
         }
-
         return memoValidator;
     }
 

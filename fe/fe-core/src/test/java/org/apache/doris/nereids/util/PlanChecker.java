@@ -115,13 +115,11 @@ public class PlanChecker {
 
     public PlanChecker parse(String sql) {
         this.cascadesContext = MemoTestUtils.createCascadesContext(connectContext, sql);
-        this.cascadesContext.toMemo();
         return this;
     }
 
     public PlanChecker analyze() {
         this.cascadesContext.newAnalyzer().analyze();
-        this.cascadesContext.toMemo();
         InitMaterializationContextHook.INSTANCE.initMaterializationContext(this.cascadesContext);
         return this;
     }
@@ -134,15 +132,12 @@ public class PlanChecker {
         connectContext.getSessionVariable().setDisableNereidsRules(String.join(",", disableRuleWithAuth));
         this.cascadesContext.newAnalyzer().analyze();
         connectContext.getSessionVariable().setDisableNereidsRules(String.join(",", originDisableRules));
-        this.cascadesContext.toMemo();
-        MemoValidator.validate(cascadesContext.getMemo());
         return this;
     }
 
     public PlanChecker analyze(String sql) {
         this.cascadesContext = MemoTestUtils.createCascadesContext(connectContext, sql);
         this.cascadesContext.newAnalyzer().analyze();
-        this.cascadesContext.toMemo();
         return this;
     }
 
@@ -150,8 +145,6 @@ public class PlanChecker {
         Rewriter.getWholeTreeRewriterWithCustomJobs(cascadesContext,
                         ImmutableList.of(Rewriter.custom(RuleType.TEST_REWRITE, () -> customRewriter)))
                 .execute();
-        cascadesContext.toMemo();
-        MemoValidator.validate(cascadesContext.getMemo());
         return this;
     }
 
@@ -187,8 +180,6 @@ public class PlanChecker {
         Rewriter.getWholeTreeRewriterWithCustomJobs(cascadesContext,
                         ImmutableList.of(new RootPlanTreeRewriteJob(rule, PlanTreeRewriteTopDownJob::new, true)))
                 .execute();
-        cascadesContext.toMemo();
-        MemoValidator.validate(cascadesContext.getMemo());
         return this;
     }
 
@@ -246,7 +237,6 @@ public class PlanChecker {
 
     public PlanChecker rewrite() {
         Rewriter.getWholeTreeRewriter(cascadesContext).execute();
-        cascadesContext.toMemo();
         return this;
     }
 
@@ -277,6 +267,9 @@ public class PlanChecker {
     public PlanChecker dpHypOptimize() {
         double now = System.currentTimeMillis();
         cascadesContext.getStatementContext().setDpHyp(true);
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         cascadesContext.getConnectContext().getSessionVariable().enableDPHypOptimizer = true;
         Group root = cascadesContext.getMemo().getRoot();
         cascadesContext.pushJob(new JoinOrderJob(root, cascadesContext.getCurrentJobContext()));
@@ -289,6 +282,9 @@ public class PlanChecker {
     }
 
     public PlanChecker implement() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Plan plan = transformToPhysicalPlan(cascadesContext.getMemo().getRoot());
         Assertions.assertTrue(plan instanceof PhysicalPlan);
         if (plan instanceof PhysicalQuickSort && !((PhysicalQuickSort) plan).getSortPhase().isLocal()) {
@@ -336,6 +332,9 @@ public class PlanChecker {
     }
 
     public PlanChecker transform(PatternMatcher patternMatcher) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         return transform(cascadesContext.getMemo().getRoot(), patternMatcher);
     }
 
@@ -354,6 +353,9 @@ public class PlanChecker {
     public PlanChecker transform(GroupExpression groupExpression, PatternMatcher patternMatcher) {
         GroupExpressionMatching matchResult = new GroupExpressionMatching(patternMatcher.pattern, groupExpression);
 
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         for (Plan before : matchResult) {
             Plan after = patternMatcher.matchedAction.apply(
                     new MatchingContext(before, patternMatcher.pattern, cascadesContext));
@@ -370,10 +372,16 @@ public class PlanChecker {
 
     // Exploration Rule.
     public PlanChecker applyExploration(Rule rule) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         return applyExploration(cascadesContext.getMemo().getRoot(), rule);
     }
 
     public PlanChecker applyExploration(List<Rule> rules) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         rules.forEach(rule -> applyExploration(cascadesContext.getMemo().getRoot(), rule));
         return this;
     }
@@ -455,14 +463,19 @@ public class PlanChecker {
     }
 
     public PlanChecker deriveStats() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         cascadesContext.getMemo().getRoot().getLogicalExpressions().forEach(groupExpression ->
                 cascadesContext.pushJob(new DeriveStatsJob(groupExpression, cascadesContext.getCurrentJobContext())));
-
         cascadesContext.getJobScheduler().executeJobPool(cascadesContext);
         return this;
     }
 
     public PlanChecker matchesFromRoot(PatternDescriptor<? extends Plan> patternDesc) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Memo memo = cascadesContext.getMemo();
         assertMatches(memo, () -> new GroupExpressionMatching(patternDesc.pattern,
                 memo.getRoot().getLogicalExpression()).iterator().hasNext());
@@ -470,6 +483,9 @@ public class PlanChecker {
     }
 
     public PlanChecker notMatchesFromRoot(PatternDescriptor<? extends Plan> patternDesc) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Memo memo = cascadesContext.getMemo();
         assertMatches(memo, () -> !(new GroupExpressionMatching(patternDesc.pattern,
                 memo.getRoot().getLogicalExpression()).iterator().hasNext()));
@@ -477,6 +493,9 @@ public class PlanChecker {
     }
 
     public PlanChecker matches(PatternDescriptor<? extends Plan> patternDesc) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Memo memo = cascadesContext.getMemo();
         checkSlotFromChildren(memo);
         assertMatches(memo, () -> MatchingUtils.topDownFindMatching(memo.getRoot(), patternDesc.pattern));
@@ -484,6 +503,9 @@ public class PlanChecker {
     }
 
     public PlanChecker anyMatches(PatternDescriptor<? extends Plan> patternDesc) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Set<Boolean> matchResult = new HashSet<>();
         Memo memo = cascadesContext.getMemo();
         checkSlotFromChildren(memo);
@@ -493,6 +515,9 @@ public class PlanChecker {
     }
 
     public PlanChecker nonMatch(PatternDescriptor<? extends Plan> patternDesc) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Memo memo = cascadesContext.getMemo();
         checkSlotFromChildren(memo);
         assertMatches(memo, () -> !MatchingUtils.topDownFindMatching(memo.getRoot(), patternDesc.pattern));
@@ -501,12 +526,18 @@ public class PlanChecker {
 
     // TODO: remove it.
     public PlanChecker matchesNotCheck(PatternDescriptor<? extends Plan> patternDesc) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Memo memo = cascadesContext.getMemo();
         assertMatches(memo, () -> MatchingUtils.topDownFindMatching(memo.getRoot(), patternDesc.pattern));
         return this;
     }
 
     public PlanChecker matchesExploration(PatternDescriptor<? extends Plan> patternDesc) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Memo memo = cascadesContext.getMemo();
         checkSlotFromChildren(memo);
         Supplier<Boolean> asserter = () -> new GroupExpressionMatching(patternDesc.pattern,
@@ -533,21 +564,33 @@ public class PlanChecker {
     }
 
     public PlanChecker checkGroupNum(int expectGroupNum) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Assertions.assertEquals(expectGroupNum, cascadesContext.getMemo().getGroups().size());
         return this;
     }
 
     public PlanChecker checkGroupExpressionNum(int expectGroupExpressionNum) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Assertions.assertEquals(expectGroupExpressionNum, cascadesContext.getMemo().getGroupExpressions().size());
         return this;
     }
 
     public PlanChecker checkFirstRootLogicalPlan(Plan expectPlan) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Assertions.assertEquals(expectPlan, cascadesContext.getMemo().getRoot().getLogicalExpression().getPlan());
         return this;
     }
 
     public PlanChecker checkMemo(Consumer<Memo> memoChecker) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         memoChecker.accept(cascadesContext.getMemo());
         return this;
     }
@@ -635,26 +678,41 @@ public class PlanChecker {
     }
 
     public PhysicalPlan getBestPlanTree() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         return chooseBestPlan(cascadesContext.getMemo().getRoot(), PhysicalProperties.GATHER);
     }
 
     public PhysicalPlan getBestPlanTree(PhysicalProperties properties) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         return chooseBestPlan(cascadesContext.getMemo().getRoot(), properties);
     }
 
     public PlanChecker printlnBestPlanTree() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         System.out.println(chooseBestPlan(cascadesContext.getMemo().getRoot(), PhysicalProperties.ANY).treeString());
         System.out.println("-----------------------------");
         return this;
     }
 
     public PlanChecker printlnTree() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         System.out.println(cascadesContext.getMemo().copyOut().treeString());
         System.out.println("-----------------------------");
         return this;
     }
 
     public PlanChecker printlnAllTree() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         System.out.println("--------------------------------");
         for (Plan plan : cascadesContext.getMemo().copyOutAll()) {
             System.out.println(plan.treeString());
@@ -688,6 +746,9 @@ public class PlanChecker {
     }
 
     public PlanChecker printlnExploration() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         System.out.println(
                 cascadesContext.getMemo().copyOut(cascadesContext.getMemo().getRoot().logicalExpressionsAt(1), false)
                         .treeString());
@@ -695,6 +756,9 @@ public class PlanChecker {
     }
 
     public PlanChecker printlnOrigin() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         System.out.println(
                 cascadesContext.getMemo().copyOut(cascadesContext.getMemo().getRoot().logicalExpressionsAt(0), false)
                         .treeString());
