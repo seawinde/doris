@@ -190,6 +190,9 @@ public class PlanChecker {
      * @return this checker, for call chaining of follow-up check
      */
     public PlanChecker applyTopDownInMemo(PatternMatcher patternMatcher) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         cascadesContext.topDownRewrite(new OneRewriteRuleFactory() {
             @Override
             public Rule build() {
@@ -201,19 +204,23 @@ public class PlanChecker {
     }
 
     public PlanChecker applyBottomUp(RuleFactory rule) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Rewriter.getWholeTreeRewriterWithCustomJobs(cascadesContext,
                         ImmutableList.of(Rewriter.bottomUp(rule)))
                 .execute();
-        cascadesContext.toMemo();
         MemoValidator.validate(cascadesContext.getMemo());
         return this;
     }
 
     public PlanChecker applyBottomUp(List<Rule> rule) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         Rewriter.getWholeTreeRewriterWithCustomJobs(cascadesContext,
                         ImmutableList.of(new RootPlanTreeRewriteJob(rule, PlanTreeRewriteBottomUpJob::new, true)))
                 .execute();
-        cascadesContext.toMemo();
         MemoValidator.validate(cascadesContext.getMemo());
         return this;
     }
@@ -225,6 +232,9 @@ public class PlanChecker {
      * @return this checker, for call chaining of follow-up check
      */
     public PlanChecker applyBottomUpInMemo(PatternMatcher patternMatcher) {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         cascadesContext.bottomUpRewrite(new OneRewriteRuleFactory() {
             @Override
             public Rule build() {
@@ -648,10 +658,16 @@ public class PlanChecker {
     }
 
     public Plan getPlan() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         return cascadesContext.getMemo().copyOut();
     }
 
     public List<Plan> getAllPlan() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         return cascadesContext.getMemo().copyOutAll();
     }
 
@@ -742,6 +758,9 @@ public class PlanChecker {
     }
 
     public int plansNumber() {
+        if (cascadesContext.getMemo() == null) {
+            MemoTestUtils.initMemoAndValidState(cascadesContext);
+        }
         return cascadesContext.getMemo().copyOutAll().size();
     }
 

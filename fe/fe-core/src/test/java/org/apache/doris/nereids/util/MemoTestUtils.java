@@ -87,8 +87,7 @@ public class MemoTestUtils {
 
     public static MemoValidator initMemoAndValidState(CascadesContext cascadesContext) {
         cascadesContext.toMemo();
-        // TODO: 2025/4/7 Add cycle detect method for multi plan in memo
-        // MemoValidator.validateInitState(cascadesContext.getMemo(), cascadesContext.getRewritePlan());
+        MemoValidator.validateInitState(cascadesContext.getMemo(), cascadesContext.getRewritePlan());
         return null;
     }
 

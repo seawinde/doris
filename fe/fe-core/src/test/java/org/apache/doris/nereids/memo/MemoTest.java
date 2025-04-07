@@ -212,7 +212,10 @@ class MemoTest implements MemoPatternMatchSupported {
         // when unboundRelation contains id, the case is illegal.
         LogicalJoin<UnboundRelation, UnboundRelation> topJoin = new LogicalJoin<>(JoinType.INNER_JOIN, scanA, scanA, null);
 
-        Assertions.assertThrows(IllegalStateException.class, () -> PlanChecker.from(connectContext, topJoin));
+        Assertions.assertThrows(IllegalStateException.class, () -> {
+            PlanChecker planChecker = PlanChecker.from(connectContext, topJoin);
+            MemoTestUtils.initMemoAndValidState(planChecker.getCascadesContext());
+        });
     }
 
     @Test
