@@ -21,7 +21,6 @@ import org.apache.doris.analysis.ExplainOptions;
 import org.apache.doris.analysis.StatementBase;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.common.Pair;
-import org.apache.doris.nereids.DorisLexer;
 import org.apache.doris.nereids.DorisParser;
 import org.apache.doris.nereids.DorisParser.NonReservedContext;
 import org.apache.doris.nereids.StatementContext;
@@ -77,15 +76,15 @@ public class NereidsParser {
     private static final Map<String, Integer> LITERAL_TOKENS;
 
     static {
-        EXPLAIN_TOKENS.set(DorisLexer.EXPLAIN);
-        EXPLAIN_TOKENS.set(DorisLexer.PARSED);
-        EXPLAIN_TOKENS.set(DorisLexer.ANALYZED);
-        EXPLAIN_TOKENS.set(DorisLexer.LOGICAL);
-        EXPLAIN_TOKENS.set(DorisLexer.REWRITTEN);
-        EXPLAIN_TOKENS.set(DorisLexer.PHYSICAL);
-        EXPLAIN_TOKENS.set(DorisLexer.OPTIMIZED);
-        EXPLAIN_TOKENS.set(DorisLexer.PLAN);
-        EXPLAIN_TOKENS.set(DorisLexer.PROCESS);
+        EXPLAIN_TOKENS.set(LocalCachedDorisLexer.EXPLAIN);
+        EXPLAIN_TOKENS.set(LocalCachedDorisLexer.PARSED);
+        EXPLAIN_TOKENS.set(LocalCachedDorisLexer.ANALYZED);
+        EXPLAIN_TOKENS.set(LocalCachedDorisLexer.LOGICAL);
+        EXPLAIN_TOKENS.set(LocalCachedDorisLexer.REWRITTEN);
+        EXPLAIN_TOKENS.set(LocalCachedDorisLexer.PHYSICAL);
+        EXPLAIN_TOKENS.set(LocalCachedDorisLexer.OPTIMIZED);
+        EXPLAIN_TOKENS.set(LocalCachedDorisLexer.PLAN);
+        EXPLAIN_TOKENS.set(LocalCachedDorisLexer.PROCESS);
 
         ImmutableSet.Builder<String> nonReserveds = ImmutableSet.builder();
         for (Method declaredMethod : NonReservedContext.class.getDeclaredMethods()) {
@@ -99,8 +98,8 @@ public class NereidsParser {
         NON_RESERVED_KEYWORDS = nonReserveds.build();
 
         ImmutableMap.Builder<String, Integer> literalToTokenType = ImmutableMap.builder();
-        for (int tokenType = 0; tokenType <= DorisLexer.VOCABULARY.getMaxTokenType(); tokenType++) {
-            String literalName = DorisLexer.VOCABULARY.getLiteralName(tokenType);
+        for (int tokenType = 0; tokenType <= LocalCachedDorisLexer.VOCABULARY.getMaxTokenType(); tokenType++) {
+            String literalName = LocalCachedDorisLexer.VOCABULARY.getLiteralName(tokenType);
             if (literalName != null) {
                 literalToTokenType.put(literalName.substring(1, literalName.length() - 1), tokenType);
             }
@@ -140,7 +139,7 @@ public class NereidsParser {
      * for example: select id from tbl return Tokens: ['select', 'id', 'from', 'tbl']
      */
     public static TokenSource scan(String sql) {
-        return new DorisLexer(new CaseInsensitiveStream(CharStreams.fromString(sql)));
+        return new LocalCachedDorisLexer(new CaseInsensitiveStream(CharStreams.fromString(sql)));
     }
 
     /**
@@ -151,7 +150,7 @@ public class NereidsParser {
     public static Optional<Pair<ExplainOptions, String>> tryParseExplainPlan(String sql) {
         try {
             TokenSource tokenSource = scan(sql);
-            if (expect(tokenSource, DorisLexer.EXPLAIN) == null) {
+            if (expect(tokenSource, LocalCachedDorisLexer.EXPLAIN) == null) {
                 return Optional.empty();
             }
 
@@ -162,16 +161,16 @@ public class NereidsParser {
 
             int tokenType = token.getType();
             ExplainLevel explainLevel = ExplainLevel.ALL_PLAN;
-            if (tokenType == DorisLexer.PARSED) {
+            if (tokenType == LocalCachedDorisLexer.PARSED) {
                 explainLevel = ExplainLevel.PARSED_PLAN;
                 token = readUntilNonComment(tokenSource);
-            } else if (tokenType == DorisLexer.ANALYZED) {
+            } else if (tokenType == LocalCachedDorisLexer.ANALYZED) {
                 explainLevel = ExplainLevel.ANALYZED_PLAN;
                 token = readUntilNonComment(tokenSource);
-            } else if (tokenType == DorisLexer.LOGICAL || tokenType == DorisLexer.REWRITTEN) {
+            } else if (tokenType == LocalCachedDorisLexer.LOGICAL || tokenType == LocalCachedDorisLexer.REWRITTEN) {
                 explainLevel = ExplainLevel.REWRITTEN_PLAN;
                 token = readUntilNonComment(tokenSource);
-            } else if (tokenType == DorisLexer.PHYSICAL || tokenType == DorisLexer.OPTIMIZED) {
+            } else if (tokenType == LocalCachedDorisLexer.PHYSICAL || tokenType == LocalCachedDorisLexer.OPTIMIZED) {
                 explainLevel = ExplainLevel.OPTIMIZED_PLAN;
                 token = readUntilNonComment(tokenSource);
             }
@@ -180,14 +179,14 @@ public class NereidsParser {
                 return Optional.empty();
             }
             tokenType = token.getType();
-            if (tokenType != DorisLexer.PLAN) {
+            if (tokenType != LocalCachedDorisLexer.PLAN) {
                 return Optional.empty();
             }
 
             token = readUntilNonComment(tokenSource);
             Token explainPlanBody;
             boolean showPlanProcess = false;
-            if (token.getType() == DorisLexer.PROCESS) {
+            if (token.getType() == LocalCachedDorisLexer.PROCESS) {
                 showPlanProcess = true;
                 explainPlanBody = readUntilNonComment(tokenSource);
             } else {
@@ -216,9 +215,9 @@ public class NereidsParser {
         Token token = tokenSource.nextToken();
         while (token != null) {
             int tokenType = token.getType();
-            if (tokenType == DorisLexer.BRACKETED_COMMENT
-                    || tokenType == DorisLexer.SIMPLE_COMMENT
-                    || tokenType == DorisLexer.WS) {
+            if (tokenType == LocalCachedDorisLexer.BRACKETED_COMMENT
+                    || tokenType == LocalCachedDorisLexer.SIMPLE_COMMENT
+                    || tokenType == LocalCachedDorisLexer.WS) {
                 token = tokenSource.nextToken();
                 continue;
             }
@@ -343,16 +342,18 @@ public class NereidsParser {
     public static Map<Integer, ParserRuleContext> getHintMap(String sql,
                                                              Function<DorisParser, ParserRuleContext> parseFunction) {
         // parse hint first round
-        DorisLexer hintLexer = new DorisLexer(new CaseInsensitiveStream(CharStreams.fromString(sql)));
+        LocalCachedDorisLexer hintLexer = new LocalCachedDorisLexer(
+                new CaseInsensitiveStream(CharStreams.fromString(sql)));
         CommonTokenStream hintTokenStream = new CommonTokenStream(hintLexer);
 
         Map<Integer, ParserRuleContext> selectHintMap = Maps.newHashMap();
 
         Token hintToken = hintTokenStream.getTokenSource().nextToken();
-        while (hintToken != null && hintToken.getType() != DorisLexer.EOF) {
+        while (hintToken != null && hintToken.getType() != LocalCachedDorisLexer.EOF) {
             if (hintToken.getChannel() == 2 && sql.charAt(hintToken.getStartIndex() + 2) == '+') {
                 String hintSql = sql.substring(hintToken.getStartIndex() + 3, hintToken.getStopIndex() + 1);
-                DorisLexer newHintLexer = new DorisLexer(new CaseInsensitiveStream(CharStreams.fromString(hintSql)));
+                LocalCachedDorisLexer newHintLexer = new LocalCachedDorisLexer(
+                        new CaseInsensitiveStream(CharStreams.fromString(hintSql)));
                 CommonTokenStream newHintTokenStream = new CommonTokenStream(newHintLexer);
                 DorisParser hintParser = new DorisParser(newHintTokenStream);
                 ParserRuleContext hintContext = parseFunction.apply(hintParser);
@@ -365,7 +366,7 @@ public class NereidsParser {
 
     /** toAst */
     public static ParserRuleContext toAst(String sql, Function<DorisParser, ParserRuleContext> parseFunction) {
-        DorisLexer lexer = new DorisLexer(new CaseInsensitiveStream(CharStreams.fromString(sql)));
+        LocalCachedDorisLexer lexer = new LocalCachedDorisLexer(new CaseInsensitiveStream(CharStreams.fromString(sql)));
         CommonTokenStream tokenStream = new CommonTokenStream(lexer);
         DorisParser parser = new DorisParser(tokenStream);
 
@@ -397,7 +398,7 @@ public class NereidsParser {
      * will be normalized to: select \/*+SET_VAR(key=value)*\/ * , a, b from table
      */
     public static String removeCommentAndTrimBlank(String sql) {
-        DorisLexer lexer = new DorisLexer(new CaseInsensitiveStream(CharStreams.fromString(sql)));
+        LocalCachedDorisLexer lexer = new LocalCachedDorisLexer(new CaseInsensitiveStream(CharStreams.fromString(sql)));
         CommonTokenStream tokenStream = new CommonTokenStream(lexer);
         tokenStream.fill();
 
@@ -407,11 +408,11 @@ public class NereidsParser {
         for (Token token : tokenStream.getTokens()) {
             int tokenType = token.getType();
             switch (tokenType) {
-                case DorisLexer.SIMPLE_COMMENT:
-                case DorisLexer.WS:
+                case LocalCachedDorisLexer.SIMPLE_COMMENT:
+                case LocalCachedDorisLexer.WS:
                 case Recognizer.EOF:
                     break;
-                case DorisLexer.BRACKETED_COMMENT:
+                case LocalCachedDorisLexer.BRACKETED_COMMENT:
                     String bracketedComment = token.getText();
                     // append hint
                     if (bracketedComment.startsWith("/*+")) {
