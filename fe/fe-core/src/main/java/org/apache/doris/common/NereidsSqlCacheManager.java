@@ -140,7 +140,7 @@ public class NereidsSqlCacheManager {
 
         SqlCacheContext sqlCacheContext = sqlCacheContextOpt.get();
         String key = sqlCacheContext.getCacheKeyType() == CacheKeyType.SQL
-                ? generateCacheKey(connectContext, normalizeSql(sql))
+                ? generateCacheKey(connectContext, normalizeSql(sql, connectContext))
                 : generateCacheKey(connectContext, DebugUtil.printId(sqlCacheContext.getOrComputeCacheKeyMd5()));
         if (sqlCaches.getIfPresent(key) == null && sqlCacheContext.getOrComputeCacheKeyMd5() != null
                 && sqlCacheContext.getResultSetInFe().isPresent()) {
@@ -167,7 +167,7 @@ public class NereidsSqlCacheManager {
         }
         SqlCacheContext sqlCacheContext = sqlCacheContextOpt.get();
         String key = sqlCacheContext.getCacheKeyType() == CacheKeyType.SQL
-                ? generateCacheKey(connectContext, normalizeSql(sql))
+                ? generateCacheKey(connectContext, normalizeSql(sql, connectContext))
                 : generateCacheKey(connectContext, DebugUtil.printId(sqlCacheContext.getOrComputeCacheKeyMd5()));
         if (sqlCaches.getIfPresent(key) == null && sqlCacheContext.getOrComputeCacheKeyMd5() != null) {
             SqlCache cache = (SqlCache) analyzer.getCache();
@@ -195,7 +195,7 @@ public class NereidsSqlCacheManager {
                 return Optional.empty();
             default: { }
         }
-        String key = generateCacheKey(connectContext, normalizeSql(sql.trim()));
+        String key = generateCacheKey(connectContext, normalizeSql(sql.trim(), connectContext));
         SqlCacheContext sqlCacheContext = sqlCaches.getIfPresent(key);
         if (sqlCacheContext == null) {
             return Optional.empty();
@@ -236,7 +236,10 @@ public class NereidsSqlCacheManager {
                 + ":" + sqlOrMd5;
     }
 
-    private String normalizeSql(String sql) {
+    private String normalizeSql(String sql, ConnectContext connectContext) {
+        if (!connectContext.getSessionVariable().sqlCacheEnableNormalizeSql) {
+            return sql;
+        }
         return NereidsParser.removeCommentAndTrimBlank(sql);
     }
 
