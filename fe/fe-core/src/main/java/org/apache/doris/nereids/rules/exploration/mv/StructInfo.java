@@ -48,6 +48,7 @@ import org.apache.doris.nereids.trees.plans.commands.UpdateMvByPartitionCommand.
 import org.apache.doris.nereids.trees.plans.commands.UpdateMvByPartitionCommand.PredicateAdder;
 import org.apache.doris.nereids.trees.plans.logical.LogicalAggregate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
+import org.apache.doris.nereids.trees.plans.logical.LogicalGenerate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalJoin;
 import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
@@ -668,7 +669,8 @@ public class StructInfo {
                     || plan instanceof LogicalSort
                     || plan instanceof LogicalAggregate
                     || plan instanceof GroupPlan
-                    || plan instanceof LogicalRepeat) {
+                    || plan instanceof LogicalRepeat
+                    || plan instanceof LogicalGenerate) {
                 return doVisit(plan, checkContext);
             }
             return false;
@@ -702,7 +704,8 @@ public class StructInfo {
                     || plan instanceof Project
                     || plan instanceof CatalogRelation
                     || plan instanceof GroupPlan
-                    || plan instanceof LogicalRepeat) {
+                    || plan instanceof LogicalRepeat
+                    || plan instanceof LogicalGenerate) {
                 return doVisit(plan, checkContext);
             }
             return false;

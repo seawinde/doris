@@ -26,6 +26,7 @@ import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalAggregate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalCatalogRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
+import org.apache.doris.nereids.trees.plans.logical.LogicalGenerate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanVisitor;
 import org.apache.doris.nereids.util.Utils;
@@ -94,6 +95,13 @@ public class StructInfoNode extends AbstractNode {
             }
 
             @Override
+            public Void visitLogicalGenerate(LogicalGenerate<? extends Plan> generate,
+                    Pair<Boolean, Builder<Set<Expression>>> collector) {
+                collector.value().add(ImmutableSet.copyOf(generate.getGenerators()));
+                return super.visit(generate, collector);
+            }
+
+            @Override
             public Void visit(Plan plan, Pair<Boolean, ImmutableList.Builder<Set<Expression>>> context) {
                 if (!isValidNodePlan(plan)) {
                     context.first = false;
@@ -107,7 +115,8 @@ public class StructInfoNode extends AbstractNode {
 
     private boolean isValidNodePlan(Plan plan) {
         return plan instanceof LogicalProject || plan instanceof LogicalAggregate
-                || plan instanceof LogicalFilter || plan instanceof LogicalCatalogRelation;
+                || plan instanceof LogicalFilter || plan instanceof LogicalCatalogRelation
+                || plan instanceof LogicalGenerate;
     }
 
     /**

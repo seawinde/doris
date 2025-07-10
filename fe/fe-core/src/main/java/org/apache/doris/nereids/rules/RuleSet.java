@@ -33,6 +33,7 @@ import org.apache.doris.nereids.rules.exploration.join.PushDownProjectThroughSem
 import org.apache.doris.nereids.rules.exploration.join.SemiJoinSemiJoinTransposeProject;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewAggregateOnNoneAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewAggregateRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewExplodeRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterProjectAggregateRule;
@@ -261,6 +262,7 @@ public class RuleSet {
             .add(MaterializedViewProjectFilterScanRule.INSTANCE)
             .add(MaterializedViewAggregateOnNoneAggregateRule.INSTANCE)
             .add(MaterializedViewOnlyScanRule.INSTANCE)
+            .add(MaterializedViewExplodeRule.INSTANCE)
             .build();
 
     public static final List<Rule> DPHYP_REORDER_RULES = ImmutableList.<Rule>builder()
