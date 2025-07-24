@@ -22,7 +22,7 @@ suite("mv_with_date_trunc") {
     sql "set runtime_filter_mode=OFF";
     sql "SET ignore_shape_nodes='PhysicalDistribute,PhysicalProject'"
     // Virtual column will make mv rewrite fail, so we disable the rule
-    sql """set disable_nereids_rules='PUSH_DOWN_VIRTUAL_COLUMNS_INTO_OLAP_SCAN';"""
+//    sql """set disable_nereids_rules='PUSH_DOWN_VIRTUAL_COLUMNS_INTO_OLAP_SCAN';"""
 
     sql """
     drop table if exists lineitem
