@@ -28,6 +28,7 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalCatalogRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
 import org.apache.doris.nereids.trees.plans.logical.LogicalGenerate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
+import org.apache.doris.nereids.trees.plans.logical.LogicalWindow;
 import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanVisitor;
 import org.apache.doris.nereids.util.Utils;
 
@@ -102,6 +103,13 @@ public class StructInfoNode extends AbstractNode {
             }
 
             @Override
+            public Void visitLogicalWindow(LogicalWindow<? extends Plan> window,
+                    Pair<Boolean, Builder<Set<Expression>>> context) {
+                collector.value().add(ImmutableSet.copyOf(window.getActualWindowExpressions()));
+                return super.visit(window, context);
+            }
+
+            @Override
             public Void visit(Plan plan, Pair<Boolean, ImmutableList.Builder<Set<Expression>>> context) {
                 if (!isValidNodePlan(plan)) {
                     context.first = false;
@@ -116,7 +124,7 @@ public class StructInfoNode extends AbstractNode {
     private boolean isValidNodePlan(Plan plan) {
         return plan instanceof LogicalProject || plan instanceof LogicalAggregate
                 || plan instanceof LogicalFilter || plan instanceof LogicalCatalogRelation
-                || plan instanceof LogicalGenerate;
+                || plan instanceof LogicalGenerate || plan instanceof LogicalWindow;
     }
 
     /**

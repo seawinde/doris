@@ -55,6 +55,7 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.trees.plans.logical.LogicalRepeat;
 import org.apache.doris.nereids.trees.plans.logical.LogicalSort;
+import org.apache.doris.nereids.trees.plans.logical.LogicalWindow;
 import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanRewriter;
 import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanVisitor;
 import org.apache.doris.nereids.util.ExpressionUtils;
@@ -494,7 +495,8 @@ public class StructInfo {
             // Just collect the filter in top plan, if meet other node except project and filter, return
             if (!(plan instanceof LogicalProject)
                     && !(plan instanceof LogicalFilter)
-                    && !(plan instanceof LogicalAggregate)) {
+                    && !(plan instanceof LogicalAggregate)
+                    && !(plan instanceof LogicalWindow)) {
                 return null;
             }
             if (plan instanceof LogicalFilter) {
@@ -590,7 +592,11 @@ public class StructInfo {
         // the aggregate above join
         private boolean containsTopAggregate = false;
         private int topAggregateNum = 0;
+        private boolean containsTopWindow = false;
+        private int topWindowNum = 0;
         private boolean alreadyMeetJoin = false;
+        private boolean alreadyMeetAggregate = false;
+        private boolean windowUnderAggregate = false;
         private final Set<JoinType> supportJoinTypes;
 
         public PlanCheckContext(Set<JoinType> supportJoinTypes) {
@@ -603,6 +609,22 @@ public class StructInfo {
 
         public void setContainsTopAggregate(boolean containsTopAggregate) {
             this.containsTopAggregate = containsTopAggregate;
+        }
+
+        public boolean isContainsTopWindow() {
+            return containsTopWindow;
+        }
+
+        public void setContainsTopWindow(boolean containsTopWindow) {
+            this.containsTopWindow = containsTopWindow;
+        }
+
+        public int getTopWindowNum() {
+            return topWindowNum;
+        }
+
+        public void plusTopWindowNum() {
+            this.topWindowNum += 1;
         }
 
         public boolean isAlreadyMeetJoin() {
@@ -623,6 +645,22 @@ public class StructInfo {
 
         public void plusTopAggregateNum() {
             this.topAggregateNum += 1;
+        }
+
+        public boolean isAlreadyMeetAggregate() {
+            return alreadyMeetAggregate;
+        }
+
+        public void setAlreadyMeetAggregate(boolean alreadyMeetAggregate) {
+            this.alreadyMeetAggregate = alreadyMeetAggregate;
+        }
+
+        public boolean isWindowUnderAggregate() {
+            return windowUnderAggregate;
+        }
+
+        public void setWindowUnderAggregate(boolean windowUnderAggregate) {
+            this.windowUnderAggregate = windowUnderAggregate;
         }
 
         public static PlanCheckContext of(Set<JoinType> supportJoinTypes) {
@@ -649,9 +687,22 @@ public class StructInfo {
                 PlanCheckContext checkContext) {
             if (!checkContext.isAlreadyMeetJoin()) {
                 checkContext.setContainsTopAggregate(true);
+                checkContext.setAlreadyMeetAggregate(true);
                 checkContext.plusTopAggregateNum();
             }
             return visit(aggregate, checkContext);
+        }
+
+        @Override
+        public Boolean visitLogicalWindow(LogicalWindow<? extends Plan> window, PlanCheckContext checkContext) {
+            if (!checkContext.isAlreadyMeetJoin()) {
+                checkContext.setContainsTopWindow(true);
+                checkContext.plusTopWindowNum();
+                if (checkContext.isAlreadyMeetAggregate()) {
+                    checkContext.setWindowUnderAggregate(true);
+                }
+            }
+            return visit(window, checkContext);
         }
 
         @Override
@@ -670,7 +721,8 @@ public class StructInfo {
                     || plan instanceof LogicalAggregate
                     || plan instanceof GroupPlan
                     || plan instanceof LogicalRepeat
-                    || plan instanceof LogicalGenerate) {
+                    || plan instanceof LogicalGenerate
+                    || plan instanceof LogicalWindow) {
                 return doVisit(plan, checkContext);
             }
             return false;
@@ -699,13 +751,21 @@ public class StructInfo {
         }
 
         @Override
+        public Boolean visitLogicalWindow(LogicalWindow<? extends Plan> window, PlanCheckContext checkContext) {
+            checkContext.setContainsTopWindow(true);
+            checkContext.plusTopWindowNum();
+            return visit(window, checkContext);
+        }
+
+        @Override
         public Boolean visit(Plan plan, PlanCheckContext checkContext) {
             if (plan instanceof Filter
                     || plan instanceof Project
                     || plan instanceof CatalogRelation
                     || plan instanceof GroupPlan
                     || plan instanceof LogicalRepeat
-                    || plan instanceof LogicalGenerate) {
+                    || plan instanceof LogicalGenerate
+                    || plan instanceof LogicalWindow) {
                 return doVisit(plan, checkContext);
             }
             return false;

@@ -328,14 +328,11 @@ public class ExpressionUtils {
         }
         ExpressionLineageReplacer.ExpressionReplaceContext replaceContext =
                 new ExpressionLineageReplacer.ExpressionReplaceContext(
-                        expressions.stream().map(Expression.class::cast).collect(Collectors.toList()),
-                        targetTypes,
-                        tableIdentifiers,
-                        tableBitSet);
+                        expressions.stream().map(Expression.class::cast).collect(Collectors.toList()));
 
         plan.accept(ExpressionLineageReplacer.INSTANCE, replaceContext);
         // Replace expressions by expression map
-        List<Expression> replacedExpressions = replaceContext.getReplacedExpressions();
+        List<? extends Expression> replacedExpressions = replaceContext.getReplacedExpressions();
         if (expressions.size() != replacedExpressions.size()) {
             throw new NereidsException("shuttle expression fail",
                     new MaterializedViewException("shuttle expression fail"));

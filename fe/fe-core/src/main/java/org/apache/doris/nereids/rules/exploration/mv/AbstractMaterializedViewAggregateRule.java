@@ -58,7 +58,6 @@ import org.apache.doris.nereids.util.ExpressionUtils;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 
 import java.util.ArrayList;
@@ -649,8 +648,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
         Set<Expression> topFunctionExpressions = new HashSet<>();
         queryTopPlan.getOutput().forEach(expression -> {
             ExpressionLineageReplacer.ExpressionReplaceContext replaceContext =
-                    new ExpressionLineageReplacer.ExpressionReplaceContext(ImmutableList.of(expression),
-                            ImmutableSet.of(), ImmutableSet.of(), queryStructInfo.getTableBitSet());
+                    new ExpressionLineageReplacer.ExpressionReplaceContext(ImmutableList.of(expression));
             queryTopPlan.accept(ExpressionLineageReplacer.INSTANCE, replaceContext);
             if (!Sets.intersection(bottomAggregateFunctionExprIdSet,
                     replaceContext.getExprIdExpressionMap().keySet()).isEmpty()) {
