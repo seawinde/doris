@@ -37,6 +37,7 @@ import org.apache.doris.nereids.trees.expressions.literal.Literal;
 import org.apache.doris.nereids.trees.plans.AbstractPlan;
 import org.apache.doris.nereids.trees.plans.GroupPlan;
 import org.apache.doris.nereids.trees.plans.JoinType;
+import org.apache.doris.nereids.trees.plans.LimitPhase;
 import org.apache.doris.nereids.trees.plans.ObjectId;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.RelationId;
@@ -44,17 +45,20 @@ import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
 import org.apache.doris.nereids.trees.plans.algebra.Filter;
 import org.apache.doris.nereids.trees.plans.algebra.Join;
 import org.apache.doris.nereids.trees.plans.algebra.Project;
+import org.apache.doris.nereids.trees.plans.algebra.Sink;
 import org.apache.doris.nereids.trees.plans.commands.UpdateMvByPartitionCommand.PredicateAddContext;
 import org.apache.doris.nereids.trees.plans.commands.UpdateMvByPartitionCommand.PredicateAdder;
 import org.apache.doris.nereids.trees.plans.logical.LogicalAggregate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
 import org.apache.doris.nereids.trees.plans.logical.LogicalGenerate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalJoin;
+import org.apache.doris.nereids.trees.plans.logical.LogicalLimit;
 import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.trees.plans.logical.LogicalRepeat;
 import org.apache.doris.nereids.trees.plans.logical.LogicalSort;
+import org.apache.doris.nereids.trees.plans.logical.LogicalTopN;
 import org.apache.doris.nereids.trees.plans.logical.LogicalWindow;
 import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanRewriter;
 import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanVisitor;
@@ -598,6 +602,11 @@ public class StructInfo {
         private boolean alreadyMeetAggregate = false;
         private boolean windowUnderAggregate = false;
         private final Set<JoinType> supportJoinTypes;
+        private boolean alreadyMeetLimitForbiddenNode = false;
+        private boolean containsTopLimit = false;
+        private int topLimitNum = 0;
+        private boolean containsTopTopN = false;
+        private int topTopNNum = 0;
 
         public PlanCheckContext(Set<JoinType> supportJoinTypes) {
             this.supportJoinTypes = supportJoinTypes;
@@ -625,6 +634,38 @@ public class StructInfo {
 
         public void plusTopWindowNum() {
             this.topWindowNum += 1;
+        }
+
+        public int getTopLimitNum() {
+            return topLimitNum;
+        }
+
+        public void plusTopLimitNum() {
+            this.topLimitNum += 1;
+        }
+
+        public boolean isContainsTopLimit() {
+            return containsTopLimit;
+        }
+
+        public void setContainsTopLimit(boolean containsTopLimit) {
+            this.containsTopLimit = containsTopLimit;
+        }
+
+        public int getTopTopNNum() {
+            return topTopNNum;
+        }
+
+        public void plusTopTopNNum() {
+            this.topTopNNum += 1;
+        }
+
+        public boolean isContainsTopTopN() {
+            return containsTopTopN;
+        }
+
+        public void setContainsTopTopN(boolean containsTopTopN) {
+            this.containsTopTopN = containsTopTopN;
         }
 
         public boolean isAlreadyMeetJoin() {
@@ -661,6 +702,14 @@ public class StructInfo {
 
         public void setWindowUnderAggregate(boolean windowUnderAggregate) {
             this.windowUnderAggregate = windowUnderAggregate;
+        }
+
+        public boolean isAlreadyMeetLimitForbiddenNode() {
+            return alreadyMeetLimitForbiddenNode;
+        }
+
+        public void setAlreadyMeetLimitForbiddenNode(boolean alreadyMeetLimitForbiddenNode) {
+            this.alreadyMeetLimitForbiddenNode = alreadyMeetLimitForbiddenNode;
         }
 
         public static PlanCheckContext of(Set<JoinType> supportJoinTypes) {
@@ -712,7 +761,32 @@ public class StructInfo {
         }
 
         @Override
+        public Boolean visitLogicalLimit(LogicalLimit<? extends Plan> limit, PlanCheckContext context) {
+            if (context.isAlreadyMeetLimitForbiddenNode()) {
+                return false;
+            }
+            if (limit.getPhase() == LimitPhase.GLOBAL) {
+                context.setContainsTopLimit(true);
+                context.plusTopLimitNum();
+            }
+            return visit(limit, context);
+        }
+
+        @Override
+        public Boolean visitLogicalTopN(LogicalTopN<? extends Plan> topN, PlanCheckContext context) {
+            if (context.isAlreadyMeetLimitForbiddenNode()) {
+                return false;
+            }
+            context.setContainsTopTopN(true);
+            context.plusTopTopNNum();
+            return visit(topN, context);
+        }
+
+        @Override
         public Boolean visit(Plan plan, PlanCheckContext checkContext) {
+            if (!(plan instanceof Sink) && !(plan instanceof LogicalProject) && !(plan instanceof LogicalFilter)) {
+                checkContext.setAlreadyMeetLimitForbiddenNode(true);
+            }
             if (plan instanceof Filter
                     || plan instanceof Project
                     || plan instanceof CatalogRelation
@@ -722,7 +796,9 @@ public class StructInfo {
                     || plan instanceof GroupPlan
                     || plan instanceof LogicalRepeat
                     || plan instanceof LogicalGenerate
-                    || plan instanceof LogicalWindow) {
+                    || plan instanceof LogicalWindow
+                    || plan instanceof LogicalLimit
+                    || plan instanceof LogicalTopN) {
                 return doVisit(plan, checkContext);
             }
             return false;
@@ -758,6 +834,28 @@ public class StructInfo {
         }
 
         @Override
+        public Boolean visitLogicalLimit(LogicalLimit<? extends Plan> limit, PlanCheckContext context) {
+            if (context.isAlreadyMeetLimitForbiddenNode()) {
+                return false;
+            }
+            if (limit.getPhase() == LimitPhase.GLOBAL) {
+                context.setContainsTopLimit(true);
+                context.plusTopLimitNum();
+            }
+            return visit(limit, context);
+        }
+
+        @Override
+        public Boolean visitLogicalTopN(LogicalTopN<? extends Plan> topN, PlanCheckContext context) {
+            if (context.isAlreadyMeetLimitForbiddenNode()) {
+                return false;
+            }
+            context.setContainsTopTopN(true);
+            context.plusTopTopNNum();
+            return visit(topN, context);
+        }
+
+        @Override
         public Boolean visit(Plan plan, PlanCheckContext checkContext) {
             if (plan instanceof Filter
                     || plan instanceof Project
@@ -765,7 +863,9 @@ public class StructInfo {
                     || plan instanceof GroupPlan
                     || plan instanceof LogicalRepeat
                     || plan instanceof LogicalGenerate
-                    || plan instanceof LogicalWindow) {
+                    || plan instanceof LogicalWindow
+                    || plan instanceof LogicalLimit
+                    || plan instanceof LogicalTopN) {
                 return doVisit(plan, checkContext);
             }
             return false;
