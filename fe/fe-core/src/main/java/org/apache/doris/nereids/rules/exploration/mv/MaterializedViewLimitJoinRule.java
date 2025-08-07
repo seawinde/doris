@@ -63,17 +63,22 @@ public class MaterializedViewLimitJoinRule extends AbstractMaterializedViewJoinR
         PlanCheckContext checkContext = PlanCheckContext.of(SUPPORTED_JOIN_TYPE_SET);
         return structInfo.getTopPlan().accept(StructInfo.PLAN_PATTERN_CHECKER, checkContext)
                 && !checkContext.isContainsTopAggregate() && !checkContext.isContainsTopWindow()
-                && checkContext.isContainsTopLimit() && checkContext.getTopLimitNum() == 1
-                && !checkContext.isContainsTopTopN();
+                && !checkContext.isContainsTopTopN()
+                && checkContext.isContainsTopLimit() && checkContext.getTopLimitNum() == 1;
     }
 
     @Override
     public List<Rule> buildRules() {
         return ImmutableList.of(
+                // because limit spit to two phases
                 logicalLimit(logicalLimit(logicalUnary(logicalJoin(any().when(LogicalPlan.class::isInstance),
                         any().when(LogicalPlan.class::isInstance)))
-                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter))
-                        .when(logicalLimit -> logicalLimit.getPhase() == LimitPhase.GLOBAL))
+                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter)))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_LIMIT_UNARY_JOIN),
+                logicalLimit(logicalLimit(logicalJoin(any().when(LogicalPlan.class::isInstance),
+                        any().when(LogicalPlan.class::isInstance))))
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
                         }).toRule(RuleType.MATERIALIZED_VIEW_LIMIT_JOIN)

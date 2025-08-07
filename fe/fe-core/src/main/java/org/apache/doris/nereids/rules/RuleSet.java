@@ -50,6 +50,9 @@ import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectFilt
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectFilterScanRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectScanRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewTopNAggregateRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewTopNJoinRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewTopNScanRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewWindowAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewWindowJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewWindowScanRule;
@@ -275,6 +278,9 @@ public class RuleSet {
             .add(MaterializedViewLimitScanRule.INSTANCE)
             .add(MaterializedViewLimitJoinRule.INSTANCE)
             .add(MaterializedViewLimitAggregateRule.INSTANCE)
+            .add(MaterializedViewTopNAggregateRule.INSTANCE)
+            .add(MaterializedViewTopNJoinRule.INSTANCE)
+            .add(MaterializedViewTopNScanRule.INSTANCE)
             .build();
 
     public static final List<Rule> DPHYP_REORDER_RULES = ImmutableList.<Rule>builder()

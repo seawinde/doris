@@ -762,7 +762,7 @@ public class StructInfo {
 
         @Override
         public Boolean visitLogicalLimit(LogicalLimit<? extends Plan> limit, PlanCheckContext context) {
-            if (context.isAlreadyMeetLimitForbiddenNode()) {
+            if (context.isAlreadyMeetLimitForbiddenNode() && limit.getPhase() == LimitPhase.GLOBAL) {
                 return false;
             }
             if (limit.getPhase() == LimitPhase.GLOBAL) {
@@ -835,7 +835,7 @@ public class StructInfo {
 
         @Override
         public Boolean visitLogicalLimit(LogicalLimit<? extends Plan> limit, PlanCheckContext context) {
-            if (context.isAlreadyMeetLimitForbiddenNode()) {
+            if (context.isAlreadyMeetLimitForbiddenNode() && limit.getPhase() == LimitPhase.GLOBAL) {
                 return false;
             }
             if (limit.getPhase() == LimitPhase.GLOBAL) {

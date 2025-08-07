@@ -22,13 +22,12 @@ import org.apache.doris.nereids.rules.Rule;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.rules.exploration.mv.StructInfo.PlanCheckContext;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.SlotMapping;
-import org.apache.doris.nereids.trees.plans.LimitPhase;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
-import org.apache.doris.nereids.trees.plans.logical.LogicalLimit;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
+import org.apache.doris.nereids.trees.plans.logical.LogicalTopN;
 import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanVisitor;
 
 import com.google.common.collect.ImmutableList;
@@ -39,10 +38,10 @@ import java.util.Optional;
 /**
  * MaterializedViewLimitJoinRule
  */
-public class MaterializedViewLimitAggregateRule extends AbstractMaterializedViewAggregateRule
+public class MaterializedViewTopNAggregateRule extends AbstractMaterializedViewAggregateRule
         implements AbstractMaterializedViewLimitRule {
 
-    public static MaterializedViewLimitAggregateRule INSTANCE = new MaterializedViewLimitAggregateRule();
+    public static MaterializedViewTopNAggregateRule INSTANCE = new MaterializedViewTopNAggregateRule();
 
     @Override
     protected Plan rewriteQueryByView(MatchMode matchMode, StructInfo queryStructInfo, StructInfo viewStructInfo,
@@ -52,18 +51,16 @@ public class MaterializedViewLimitAggregateRule extends AbstractMaterializedView
                 viewToQuerySlotMapping, tempRewritedPlan, materializationContext, cascadesContext);
         if (!checkTmpRewrittenPlanIsValid(tempRewritePlan)) {
             materializationContext.recordFailReason(queryStructInfo,
-                    "Limit aggregate rewriteQueryByView fail because aggregate roll up",
+                    "TopN aggregate rewriteQueryByView fail because aggregate roll up",
                     () -> String.format("tempRewrittenPlan is %s", tempRewritePlan));
             return null;
         }
-        Optional<LogicalLimit<Plan>> queryLimit
-                = queryStructInfo.getTopPlan().collectFirst(node -> node instanceof LogicalLimit
-                && ((LogicalLimit<Plan>) node).getPhase() == LimitPhase.GLOBAL);
-        Optional<LogicalLimit<Plan>> viewLimit
-                = viewStructInfo.getTopPlan().collectFirst(node -> node instanceof LogicalLimit
-                && ((LogicalLimit<Plan>) node).getPhase() == LimitPhase.GLOBAL);
-        return tryRewriteLimit(queryLimit.orElse(null), viewLimit.orElse(null), tempRewritePlan,
-                queryStructInfo, materializationContext);
+        Optional<LogicalTopN<Plan>> queryTopN
+                = queryStructInfo.getTopPlan().collectFirst(LogicalTopN.class::isInstance);
+        Optional<LogicalTopN<Plan>> viewTopN
+                = viewStructInfo.getTopPlan().collectFirst(LogicalTopN.class::isInstance);
+        return tryRewriteTopN(queryTopN.orElse(null), viewTopN.orElse(null), viewToQuerySlotMapping,
+                tempRewritePlan, queryStructInfo, viewStructInfo, materializationContext, cascadesContext);
     }
 
     @Override
@@ -71,23 +68,23 @@ public class MaterializedViewLimitAggregateRule extends AbstractMaterializedView
         PlanCheckContext checkContext = PlanCheckContext.of(SUPPORTED_JOIN_TYPE_SET);
         return structInfo.getTopPlan().accept(StructInfo.PLAN_PATTERN_CHECKER, checkContext)
                 && checkContext.isContainsTopAggregate() && checkContext.getTopAggregateNum() == 1
-                && !checkContext.isContainsTopWindow() && !checkContext.isContainsTopTopN()
-                && checkContext.isContainsTopLimit() && checkContext.getTopLimitNum() == 1;
+                && !checkContext.isContainsTopWindow() && !checkContext.isContainsTopLimit()
+                && checkContext.isContainsTopTopN() && checkContext.getTopTopNNum() == 1;
     }
 
     @Override
     public List<Rule> buildRules() {
         return ImmutableList.of(
                 // because limit spit to two phases
-                logicalLimit(logicalLimit(logicalUnary(logicalAggregate(any().when(LogicalPlan.class::isInstance)))
-                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter)))
+                logicalTopN(logicalUnary(logicalAggregate(any().when(LogicalPlan.class::isInstance)))
+                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter))
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
-                        }).toRule(RuleType.MATERIALIZED_VIEW_LIMIT_UNARY_AGGREGATE),
-                logicalLimit(logicalLimit(logicalAggregate(any().when(LogicalPlan.class::isInstance))))
+                        }).toRule(RuleType.MATERIALIZED_VIEW_TOP_N_UNARY_AGGREGATE),
+                logicalTopN(logicalAggregate(any().when(LogicalPlan.class::isInstance)))
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
-                        }).toRule(RuleType.MATERIALIZED_VIEW_LIMIT_AGGREGATE)
+                        }).toRule(RuleType.MATERIALIZED_VIEW_TOP_N_AGGREGATE)
         );
     }
 

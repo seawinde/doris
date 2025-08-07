@@ -22,11 +22,10 @@ import org.apache.doris.nereids.rules.Rule;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.rules.exploration.mv.StructInfo.PlanCheckContext;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.SlotMapping;
-import org.apache.doris.nereids.trees.plans.LimitPhase;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
-import org.apache.doris.nereids.trees.plans.logical.LogicalLimit;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
+import org.apache.doris.nereids.trees.plans.logical.LogicalTopN;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -37,10 +36,10 @@ import java.util.Optional;
 /**
  * MaterializedViewLimitScanRule
  */
-public class MaterializedViewLimitScanRule extends AbstractMaterializedViewScanRule
+public class MaterializedViewTopNScanRule extends AbstractMaterializedViewScanRule
         implements AbstractMaterializedViewLimitRule {
 
-    public static final MaterializedViewLimitScanRule INSTANCE = new MaterializedViewLimitScanRule();
+    public static final MaterializedViewTopNScanRule INSTANCE = new MaterializedViewTopNScanRule();
 
     @Override
     protected Plan rewriteQueryByView(MatchMode matchMode, StructInfo queryStructInfo, StructInfo viewStructInfo,
@@ -48,38 +47,37 @@ public class MaterializedViewLimitScanRule extends AbstractMaterializedViewScanR
             CascadesContext cascadesContext) {
         Plan tempRewritePlan = super.rewriteQueryByView(matchMode, queryStructInfo, viewStructInfo,
                 viewToQuerySlotMapping, tempRewritedPlan, materializationContext, cascadesContext);
-        Optional<LogicalLimit<Plan>> queryLimit
-                = queryStructInfo.getTopPlan().collectFirst(node -> node instanceof LogicalLimit
-                && ((LogicalLimit<Plan>) node).getPhase() == LimitPhase.GLOBAL);
-        Optional<LogicalLimit<Plan>> viewLimit
-                = viewStructInfo.getTopPlan().collectFirst(node -> node instanceof LogicalLimit
-                && ((LogicalLimit<Plan>) node).getPhase() == LimitPhase.GLOBAL);
-        return tryRewriteLimit(queryLimit.orElse(null), viewLimit.orElse(null), tempRewritePlan,
-                queryStructInfo, materializationContext);
+        Optional<LogicalTopN<Plan>> queryTopN
+                = queryStructInfo.getTopPlan().collectFirst(LogicalTopN.class::isInstance);
+        Optional<LogicalTopN<Plan>> viewTopN
+                = viewStructInfo.getTopPlan().collectFirst(LogicalTopN.class::isInstance);
+        return tryRewriteTopN(queryTopN.orElse(null), viewTopN.orElse(null), viewToQuerySlotMapping,
+                tempRewritePlan, queryStructInfo, viewStructInfo, materializationContext, cascadesContext);
     }
 
     @Override
     protected boolean checkQueryPattern(StructInfo structInfo, CascadesContext cascadesContext) {
         PlanCheckContext checkContext = PlanCheckContext.of(ImmutableSet.of());
-        return structInfo.getTopPlan().accept(StructInfo.SCAN_PLAN_PATTERN_CHECKER, checkContext)
+        Boolean accept = structInfo.getTopPlan().accept(StructInfo.SCAN_PLAN_PATTERN_CHECKER, checkContext);
+        return accept
                 && !checkContext.isContainsTopAggregate() && !checkContext.isContainsTopWindow()
-                && !checkContext.isContainsTopTopN()
-                && checkContext.isContainsTopLimit() && checkContext.getTopLimitNum() == 1;
+                && !checkContext.isContainsTopLimit()
+                && checkContext.isContainsTopTopN() && checkContext.getTopTopNNum() == 1;
     }
 
     @Override
     public List<Rule> buildRules() {
         return ImmutableList.of(
                 // because limit spit to two phases
-                logicalLimit(logicalLimit(logicalUnary(logicalCatalogRelation())
-                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter)))
+                logicalTopN(logicalUnary(logicalCatalogRelation())
+                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter))
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
-                        }).toRule(RuleType.MATERIALIZED_VIEW_LIMIT_UNARY_SCAN),
-                logicalLimit(logicalLimit(logicalCatalogRelation()))
+                        }).toRule(RuleType.MATERIALIZED_VIEW_TOP_N_UNARY_SCAN),
+                logicalTopN(logicalCatalogRelation())
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
-                        }).toRule(RuleType.MATERIALIZED_VIEW_LIMIT_SCAN)
+                        }).toRule(RuleType.MATERIALIZED_VIEW_TOP_N_SCAN)
         );
     }
 }

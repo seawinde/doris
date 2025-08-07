@@ -54,7 +54,8 @@ public class MaterializedViewWindowAggregateRule extends AbstractMaterializedVie
         return structInfo.getTopPlan().accept(StructInfo.PLAN_PATTERN_CHECKER, checkContext)
                 && checkContext.isContainsTopAggregate() && checkContext.isContainsTopWindow()
                 && checkContext.getTopAggregateNum() <= 1 && checkContext.getTopWindowNum() <= 1
-                && !checkContext.isWindowUnderAggregate() && !checkContext.isContainsTopLimit();
+                && !checkContext.isWindowUnderAggregate() && !checkContext.isContainsTopLimit()
+                && !checkContext.isContainsTopTopN();
     }
 
     @Override

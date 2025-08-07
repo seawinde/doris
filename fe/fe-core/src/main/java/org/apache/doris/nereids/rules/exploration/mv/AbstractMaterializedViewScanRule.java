@@ -82,6 +82,6 @@ public abstract class AbstractMaterializedViewScanRule extends AbstractMateriali
         PlanCheckContext checkContext = PlanCheckContext.of(ImmutableSet.of());
         return structInfo.getTopPlan().accept(StructInfo.SCAN_PLAN_PATTERN_CHECKER, checkContext)
                 && !checkContext.isContainsTopAggregate() && !checkContext.isContainsTopWindow()
-                && !checkContext.isContainsTopLimit();
+                && !checkContext.isContainsTopLimit() && !checkContext.isContainsTopTopN();
     }
 }
