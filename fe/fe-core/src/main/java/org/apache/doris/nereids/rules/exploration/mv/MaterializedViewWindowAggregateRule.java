@@ -23,7 +23,9 @@ import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.rules.exploration.mv.StructInfo.PlanCheckContext;
 import org.apache.doris.nereids.rules.exploration.mv.mapping.SlotMapping;
 import org.apache.doris.nereids.trees.plans.Plan;
+import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
+import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 
 import com.google.common.collect.ImmutableList;
 
@@ -55,7 +57,7 @@ public class MaterializedViewWindowAggregateRule extends AbstractMaterializedVie
                 && checkContext.isContainsTopAggregate() && checkContext.isContainsTopWindow()
                 && checkContext.getTopAggregateNum() <= 1 && checkContext.getTopWindowNum() <= 1
                 && !checkContext.isWindowUnderAggregate() && !checkContext.isContainsTopLimit()
-                && !checkContext.isContainsTopTopN();
+                && !checkContext.isContainsTopTopN() && !checkContext.isContainsTopGenerate();
     }
 
     @Override
@@ -82,7 +84,34 @@ public class MaterializedViewWindowAggregateRule extends AbstractMaterializedVie
                         any().when(LogicalPlan.class::isInstance)))))
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
-                        }).toRule(RuleType.MATERIALIZED_VIEW_FILTER_PROJECT_WINDOW_AGGREGATE)
+                        }).toRule(RuleType.MATERIALIZED_VIEW_FILTER_PROJECT_WINDOW_AGGREGATE),
+                logicalWindow(logicalUnary(logicalAggregate(any().when(LogicalPlan.class::isInstance)))
+                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_ONLY_WINDOW_UNARY_AGGREGATE),
+                logicalProject(logicalWindow(logicalUnary(logicalAggregate(any().when(LogicalPlan.class::isInstance)))
+                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter)))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_PROJECT_WINDOW_UNARY_AGGREGATE),
+                logicalFilter(logicalWindow(logicalUnary(logicalAggregate(any().when(LogicalPlan.class::isInstance)))
+                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter)))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_FILTER_WINDOW_UNARY_AGGREGATE),
+                logicalProject(logicalFilter(logicalWindow(logicalUnary(logicalAggregate(
+                        any().when(LogicalPlan.class::isInstance)))
+                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter))))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_PROJECT_FILTER_WINDOW_UNARY_AGGREGATE),
+                logicalFilter(logicalProject(logicalWindow(logicalUnary(logicalAggregate(
+                        any().when(LogicalPlan.class::isInstance)))
+                        .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter))))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_FILTER_PROJECT_WINDOW_UNARY_AGGREGATE)
         );
     }
 }

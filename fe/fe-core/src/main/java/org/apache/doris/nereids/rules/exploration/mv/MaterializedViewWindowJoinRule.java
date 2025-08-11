@@ -55,7 +55,7 @@ public class MaterializedViewWindowJoinRule extends AbstractMaterializedViewWind
         return structInfo.getTopPlan().accept(StructInfo.PLAN_PATTERN_CHECKER, checkContext)
                 && !checkContext.isContainsTopAggregate() && checkContext.isContainsTopWindow()
                 && checkContext.getTopWindowNum() <= 1 && !checkContext.isContainsTopLimit()
-                && !checkContext.isContainsTopTopN();
+                && !checkContext.isContainsTopTopN() && !checkContext.isContainsTopGenerate();
     }
 
     @Override
@@ -66,30 +66,57 @@ public class MaterializedViewWindowJoinRule extends AbstractMaterializedViewWind
                         .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter)))
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
-                        }).toRule(RuleType.MATERIALIZED_VIEW_FILTER_WINDOW_JOIN),
+                        }).toRule(RuleType.MATERIALIZED_VIEW_FILTER_WINDOW_UNARY_JOIN),
                 logicalProject(logicalWindow(logicalUnary(logicalJoin(any().when(LogicalPlan.class::isInstance),
                         any().when(LogicalPlan.class::isInstance)))
                         .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter)))
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
-                        }).toRule(RuleType.MATERIALIZED_VIEW_PROJECT_WINDOW_JOIN),
+                        }).toRule(RuleType.MATERIALIZED_VIEW_PROJECT_WINDOW_UNARY_JOIN),
                 logicalFilter(
                         logicalProject(logicalWindow(logicalUnary(logicalJoin(any().when(LogicalPlan.class::isInstance),
                                 any().when(LogicalPlan.class::isInstance)))
                                 .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter))))
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
-                        }).toRule(RuleType.MATERIALIZED_VIEW_FILTER_PROJECT_WINDOW_JOIN),
+                        }).toRule(RuleType.MATERIALIZED_VIEW_FILTER_PROJECT_WINDOW_UNARY_JOIN),
                 logicalProject(
                         logicalFilter(logicalWindow(logicalUnary(logicalJoin(any().when(LogicalPlan.class::isInstance),
                                 any().when(LogicalPlan.class::isInstance)))
                                 .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter))))
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
-                        }).toRule(RuleType.MATERIALIZED_VIEW_PROJECT_FILTER_WINDOW_JOIN),
+                        }).toRule(RuleType.MATERIALIZED_VIEW_PROJECT_FILTER_WINDOW_UNARY_JOIN),
                 logicalWindow(logicalUnary(logicalJoin(any().when(LogicalPlan.class::isInstance),
                         any().when(LogicalPlan.class::isInstance)))
                         .when(node -> node instanceof LogicalProject || node instanceof LogicalFilter))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_ONLY_WINDOW_UNARY_JOIN),
+                logicalFilter(logicalWindow(logicalJoin(any().when(LogicalPlan.class::isInstance),
+                        any().when(LogicalPlan.class::isInstance))))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_FILTER_WINDOW_JOIN),
+                logicalProject(logicalWindow(logicalJoin(any().when(LogicalPlan.class::isInstance),
+                        any().when(LogicalPlan.class::isInstance))))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_PROJECT_WINDOW_JOIN),
+                logicalFilter(
+                        logicalProject(logicalWindow(logicalJoin(any().when(LogicalPlan.class::isInstance),
+                                any().when(LogicalPlan.class::isInstance)))))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_FILTER_PROJECT_WINDOW_JOIN),
+                logicalProject(
+                        logicalFilter(logicalWindow(logicalJoin(any().when(LogicalPlan.class::isInstance),
+                                any().when(LogicalPlan.class::isInstance)))))
+                        .thenApplyMultiNoThrow(ctx -> {
+                            return rewrite(ctx.root, ctx.cascadesContext);
+                        }).toRule(RuleType.MATERIALIZED_VIEW_PROJECT_FILTER_WINDOW_JOIN),
+                logicalWindow(logicalJoin(any().when(LogicalPlan.class::isInstance),
+                        any().when(LogicalPlan.class::isInstance)))
                         .thenApplyMultiNoThrow(ctx -> {
                             return rewrite(ctx.root, ctx.cascadesContext);
                         }).toRule(RuleType.MATERIALIZED_VIEW_ONLY_WINDOW_JOIN)

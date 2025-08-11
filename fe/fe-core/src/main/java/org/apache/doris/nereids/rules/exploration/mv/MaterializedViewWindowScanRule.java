@@ -56,7 +56,7 @@ public class MaterializedViewWindowScanRule extends AbstractMaterializedViewWind
         return structInfo.getTopPlan().accept(StructInfo.SCAN_PLAN_PATTERN_CHECKER, checkContext)
                 && !checkContext.isContainsTopAggregate() && checkContext.isContainsTopWindow()
                 && checkContext.getTopWindowNum() <= 1 && !checkContext.isContainsTopLimit()
-                && !checkContext.isContainsTopTopN();
+                && !checkContext.isContainsTopTopN() && !checkContext.isContainsTopGenerate();
     }
 
     @Override

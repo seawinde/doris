@@ -60,11 +60,13 @@ import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
 import org.apache.doris.nereids.trees.plans.algebra.SetOperation.Qualifier;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
+import org.apache.doris.nereids.trees.plans.logical.LogicalGenerate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalLimit;
 import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.trees.plans.logical.LogicalTopN;
 import org.apache.doris.nereids.trees.plans.logical.LogicalUnion;
+import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanVisitor;
 import org.apache.doris.nereids.types.VariantType;
 import org.apache.doris.nereids.util.ExpressionUtils;
 import org.apache.doris.nereids.util.TypeUtils;
@@ -1019,6 +1021,35 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
         return new LogicalLimit<>(limitAndOffset.key(), limitAndOffset.value(), LimitPhase.GLOBAL, tmpRwritePlan);
     }
 
+    protected boolean checkGenerate(LogicalGenerate<Plan> queryExplodeNode, LogicalGenerate<Plan> viewExplodeNode,
+            StructInfo queryStructInfo, StructInfo viewStructInfo, SlotMapping viewToQuerySlotMapping,
+            MaterializationContext materializationContext) {
+        if (queryExplodeNode == null || viewExplodeNode == null) {
+            materializationContext.recordFailReason(queryStructInfo,
+                    "query explode rewrite fail, queryExplodeNode or viewExplodeNode is null",
+                    () -> String.format("queryExplodeNode = %s,\n viewExplodeNode = %s,\n",
+                            queryExplodeNode, viewExplodeNode));
+            return false;
+        }
+        List<? extends Expression> queryGenerateExpressions = queryExplodeNode.getGenerators();
+        List<? extends Expression> queryOrderByExpressionsShuttled = ExpressionUtils.shuttleExpressionWithLineage(
+                queryGenerateExpressions, queryStructInfo.getTopPlan(), queryStructInfo.getTableBitSet());
+
+        List<? extends Expression> viewGenerateExpressionsShuttled = ExpressionUtils.shuttleExpressionWithLineage(
+                viewExplodeNode.getGenerators(), viewStructInfo.getTopPlan(), new BitSet());
+        List<Expression> viewGenerateExpressionsQueryBasedSet = ExpressionUtils.replace(
+                viewGenerateExpressionsShuttled.stream().map(Expression.class::cast).collect(Collectors.toList()),
+                viewToQuerySlotMapping.toSlotReferenceMap());
+        if (!viewGenerateExpressionsQueryBasedSet.containsAll(queryOrderByExpressionsShuttled)) {
+            materializationContext.recordFailReason(queryStructInfo,
+                    "query explode expressions is not consistent with view explode expressions",
+                    () -> String.format("query explode expressions = %s,\n view explode expressions = %s,\n",
+                            queryGenerateExpressions, viewGenerateExpressionsQueryBasedSet));
+            return false;
+        }
+        return true;
+    }
+
     /**
      * Try rewrite topN node
      */
@@ -1122,5 +1153,26 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             return Pair.of(queryLimit, queryOffset - viewOffset);
         }
         return null;
+    }
+
+    // Check the tempRewrittenPlan is valid, should only contain logical project, scan or filter
+    protected boolean checkTmpRewrittenPlanIsValid(Plan tempRewrittenPlan) {
+        return tempRewrittenPlan.accept(new DefaultPlanVisitor<Boolean, Void>() {
+            @Override
+            public Boolean visit(Plan plan, Void context) {
+                if (plan instanceof LogicalProject || plan instanceof CatalogRelation
+                        || plan instanceof LogicalFilter) {
+                    boolean isValid;
+                    for (Plan child : plan.children()) {
+                        isValid = child.accept(this, context);
+                        if (!isValid) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+                return false;
+            }
+        }, null);
     }
 }

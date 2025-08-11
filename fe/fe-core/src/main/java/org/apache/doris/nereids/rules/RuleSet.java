@@ -33,13 +33,14 @@ import org.apache.doris.nereids.rules.exploration.join.PushDownProjectThroughSem
 import org.apache.doris.nereids.rules.exploration.join.SemiJoinSemiJoinTransposeProject;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewAggregateOnNoneAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewAggregateRule;
-import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewExplodeRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterProjectAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterProjectJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterProjectScanRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterScanRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewGenerateJoinRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewGenerateScanRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewLimitAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewLimitJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewLimitScanRule;
@@ -271,7 +272,8 @@ public class RuleSet {
             .add(MaterializedViewProjectFilterScanRule.INSTANCE)
             .add(MaterializedViewAggregateOnNoneAggregateRule.INSTANCE)
             .add(MaterializedViewOnlyScanRule.INSTANCE)
-            .add(MaterializedViewExplodeRule.INSTANCE)
+            .add(MaterializedViewGenerateScanRule.INSTANCE)
+            .add(MaterializedViewGenerateJoinRule.INSTANCE)
             .add(MaterializedViewWindowScanRule.INSTANCE)
             .add(MaterializedViewWindowJoinRule.INSTANCE)
             .add(MaterializedViewWindowAggregateRule.INSTANCE)

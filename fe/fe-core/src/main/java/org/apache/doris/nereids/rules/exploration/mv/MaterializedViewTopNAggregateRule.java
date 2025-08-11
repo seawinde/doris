@@ -69,7 +69,8 @@ public class MaterializedViewTopNAggregateRule extends AbstractMaterializedViewA
         return structInfo.getTopPlan().accept(StructInfo.PLAN_PATTERN_CHECKER, checkContext)
                 && checkContext.isContainsTopAggregate() && checkContext.getTopAggregateNum() == 1
                 && !checkContext.isContainsTopWindow() && !checkContext.isContainsTopLimit()
-                && checkContext.isContainsTopTopN() && checkContext.getTopTopNNum() == 1;
+                && checkContext.isContainsTopTopN() && checkContext.getTopTopNNum() == 1
+                && !checkContext.isContainsTopGenerate();
     }
 
     @Override

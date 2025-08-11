@@ -684,7 +684,7 @@ public abstract class AbstractMaterializedViewAggregateRule extends AbstractMate
         return structInfo.getTopPlan().accept(StructInfo.PLAN_PATTERN_CHECKER, checkContext)
                 && checkContext.isContainsTopAggregate() && checkContext.getTopAggregateNum() <= 1
                 && !checkContext.isContainsTopWindow() && !checkContext.isContainsTopLimit()
-                && !checkContext.isContainsTopTopN();
+                && !checkContext.isContainsTopTopN() && !checkContext.isContainsTopGenerate();
     }
 
     /**

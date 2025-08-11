@@ -607,6 +607,8 @@ public class StructInfo {
         private int topLimitNum = 0;
         private boolean containsTopTopN = false;
         private int topTopNNum = 0;
+        private boolean containsTopGenerate = false;
+        private int topGenerateNum = 0;
 
         public PlanCheckContext(Set<JoinType> supportJoinTypes) {
             this.supportJoinTypes = supportJoinTypes;
@@ -712,6 +714,22 @@ public class StructInfo {
             this.alreadyMeetLimitForbiddenNode = alreadyMeetLimitForbiddenNode;
         }
 
+        public void setContainsTopGenerate(boolean containsTopGenerate) {
+            this.containsTopGenerate = containsTopGenerate;
+        }
+
+        public boolean isContainsTopGenerate() {
+            return containsTopGenerate;
+        }
+
+        public void plusTopGenerateNum() {
+            this.topGenerateNum += 1;
+        }
+
+        public int getTopGenerateNum() {
+            return topGenerateNum;
+        }
+
         public static PlanCheckContext of(Set<JoinType> supportJoinTypes) {
             return new PlanCheckContext(supportJoinTypes);
         }
@@ -752,6 +770,15 @@ public class StructInfo {
                 }
             }
             return visit(window, checkContext);
+        }
+
+        @Override
+        public Boolean visitLogicalGenerate(LogicalGenerate<? extends Plan> generate, PlanCheckContext checkContext) {
+            if (!checkContext.isAlreadyMeetJoin()) {
+                checkContext.setContainsTopGenerate(true);
+                checkContext.plusTopGenerateNum();
+            }
+            return visit(generate, checkContext);
         }
 
         @Override
