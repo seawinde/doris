@@ -133,6 +133,7 @@ public class StructInfoMap {
             BitSet targetBitSet,
             Set<Integer> refreshedGroup,
             boolean forceRefresh) {
+        final int PER_CHILD_LIMIT = 32;
         StructInfoMap structInfoMap = group.getStructInfoMap();
         refreshedGroup.add(group.getGroupId().asInt());
         long memoVersion = cascadesContext.getMemo().getRefreshVersion();
@@ -162,6 +163,10 @@ public class StructInfoMap {
                         continue;
                     }
                     filteredTableMaps.add(tableMaps);
+                    if (filteredTableMaps.size() >= PER_CHILD_LIMIT) {
+                        // 对每个 child 限制大小，避免单个 child 导致爆炸
+                        break;
+                    }
                 }
                 if (!filteredTableMaps.isEmpty()) {
                     childrenTableMap.add(filteredTableMaps);
