@@ -2966,6 +2966,10 @@ public class Config extends ConfigBase {
     })
     public static int diagnose_balance_max_tablet_num_diff = 50;
 
+    @ConfField(description = {"是否跳过 catalog 层级的鉴权",
+            "Whether to skip catalog level privilege check"})
+    public static boolean skip_catalog_priv_check = false;
+
     @ConfField(mutable = true, masterOnly = true, description = {
             "Partition rebalance 方式下各个 BE 的 tablet 数的最大比率，小于该值时，会诊断为已均衡",
             "The maximum ratio of the number of tablets in each BE in partition rebalance mode. "
