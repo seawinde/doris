@@ -26,7 +26,6 @@ import org.apache.doris.catalog.PartitionKey;
 import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.catalog.RangePartitionItem;
 import org.apache.doris.catalog.ScalarType;
-import org.apache.doris.thrift.TStorageType;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.util.PropertyAnalyzer;
 import org.apache.doris.info.TableNameInfo;
@@ -37,6 +36,7 @@ import org.apache.doris.mtmv.MTMVRefreshEnum.MTMVRefreshState;
 import org.apache.doris.mtmv.MTMVRefreshEnum.MTMVState;
 import org.apache.doris.mtmv.MTMVRefreshEnum.RefreshMethod;
 import org.apache.doris.mtmv.MTMVRefreshEnum.RefreshTrigger;
+import org.apache.doris.thrift.TStorageType;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
