@@ -37,6 +37,7 @@ import org.apache.doris.mtmv.MTMVPartitionUtil;
 import org.apache.doris.mtmv.MTMVPlanUtil;
 import org.apache.doris.mtmv.MTMVRefreshEnum.MTMVRefreshState;
 import org.apache.doris.mtmv.MTMVRefreshEnum.MTMVState;
+import org.apache.doris.mtmv.MTMVRefreshEnum.RefreshMethod;
 import org.apache.doris.mtmv.MTMVRefreshInfo;
 import org.apache.doris.mtmv.MTMVRefreshPartitionSnapshot;
 import org.apache.doris.mtmv.MTMVRefreshSnapshot;
@@ -221,25 +222,29 @@ public class MTMV extends OlapTable {
         boolean needUpdateCache = false;
         if (task.getStatus() == TaskStatus.SUCCESS && !Env.isCheckpointThread()
                 && !Config.enable_check_compatibility_mode) {
-            needUpdateCache = true;
-            try {
-                // The replay thread may not have initialized the catalog yet to avoid getting stuck due
-                // to connection issues such as S3, so it is directly set to null
-                if (!isReplay) {
-                    ConnectContext currentContext = ConnectContext.get();
-                    // shouldn't do this while holding mvWriteLock
-                    // TODO: these two cache compute share something same, can be simplified in future
-                    mtmvCacheWithGuard = MTMVCache.from(this.getQuerySql(),
-                            MTMVPlanUtil.createMTMVContext(this, MTMVPlanUtil.DISABLE_RULES_WHEN_GENERATE_MTMV_CACHE),
-                            true, true, currentContext, true);
-                    mtmvCacheWithoutGuard = MTMVCache.from(this.getQuerySql(),
-                            MTMVPlanUtil.createMTMVContext(this, MTMVPlanUtil.DISABLE_RULES_WHEN_GENERATE_MTMV_CACHE),
-                            true, true, currentContext, false);
+            boolean isIncremental = getRefreshInfo() != null
+                    && getRefreshInfo().getRefreshMethod() == RefreshMethod.INCREMENTAL;
+            if (!isIncremental) {
+                needUpdateCache = true;
+                try {
+                    // The replay thread may not have initialized the catalog yet to avoid getting stuck due
+                    // to connection issues such as S3, so it is directly set to null
+                    if (!isReplay) {
+                        ConnectContext currentContext = ConnectContext.get();
+                        // shouldn't do this while holding mvWriteLock
+                        // TODO: these two cache compute share something same, can be simplified in future
+                        mtmvCacheWithGuard = MTMVCache.from(this.getQuerySql(),
+                                MTMVPlanUtil.createMTMVContext(this, MTMVPlanUtil.DISABLE_RULES_WHEN_GENERATE_MTMV_CACHE),
+                                true, true, currentContext, true);
+                        mtmvCacheWithoutGuard = MTMVCache.from(this.getQuerySql(),
+                                MTMVPlanUtil.createMTMVContext(this, MTMVPlanUtil.DISABLE_RULES_WHEN_GENERATE_MTMV_CACHE),
+                                true, true, currentContext, false);
+                    }
+                } catch (Throwable e) {
+                    mtmvCacheWithGuard = null;
+                    mtmvCacheWithoutGuard = null;
+                    LOG.warn("generate cache failed", e);
                 }
-            } catch (Throwable e) {
-                mtmvCacheWithGuard = null;
-                mtmvCacheWithoutGuard = null;
-                LOG.warn("generate cache failed", e);
             }
         }
         writeMvLock();
@@ -555,6 +560,10 @@ public class MTMV extends OlapTable {
     }
 
     public boolean canBeCandidate() {
+        if (getRefreshInfo() != null
+                && getRefreshInfo().getRefreshMethod() == RefreshMethod.INCREMENTAL) {
+            return false;
+        }
         return getStatus().canBeCandidate();
     }
 
