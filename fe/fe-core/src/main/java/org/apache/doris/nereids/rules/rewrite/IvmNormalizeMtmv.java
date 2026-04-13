@@ -19,10 +19,10 @@ package org.apache.doris.nereids.rules.rewrite;
 
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.KeysType;
-import org.apache.doris.catalog.NameSpaceContext;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.common.Pair;
 import org.apache.doris.info.TableNameInfo;
+import org.apache.doris.info.TableNameInfoUtils;
 import org.apache.doris.mtmv.MTMVPartitionUtil;
 import org.apache.doris.mtmv.ivm.IvmAggMeta;
 import org.apache.doris.mtmv.ivm.IvmAggMeta.AggTarget;
@@ -117,7 +117,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
     @Override
     public Plan visitLogicalOlapScan(LogicalOlapScan scan, Boolean isFirstNonSink) {
         OlapTable table = scan.getTable();
-        Pair<Expression, Boolean> rowId = buildRowId(table, scan, isExcludedTriggerTable(scan, table));
+        Pair<Expression, Boolean> rowId = buildRowId(table, scan, isExcludedTriggerTable(table));
         Alias rowIdAlias = new Alias(rowId.first, Column.IVM_ROW_ID_COL);
         normalizeResult.addRowId(rowIdAlias.toSlot(), rowId.second);
         List<NamedExpression> outputs = ImmutableList.<NamedExpression>builder()
@@ -509,32 +509,15 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
                 + ". Only MOW (UNIQUE_KEYS with merge-on-write) and DUP_KEYS are supported.");
     }
 
-    private boolean isExcludedTriggerTable(LogicalOlapScan scan, OlapTable table) {
+    private boolean isExcludedTriggerTable(OlapTable table) {
         if (statementContext == null || statementContext.getIvmExcludedTriggerTables().isEmpty()) {
             return false;
         }
-        TableNameInfo tableNameInfo = buildTableNameInfo(scan, table);
+        TableNameInfo tableNameInfo = TableNameInfoUtils.fromTableOrNull(table);
         if (tableNameInfo == null) {
             return false;
         }
         return MTMVPartitionUtil.isTableExcluded(statementContext.getIvmExcludedTriggerTables(), tableNameInfo);
-    }
-
-    private TableNameInfo buildTableNameInfo(LogicalOlapScan scan, OlapTable table) {
-        if (table.getDatabase() != null && table.getDatabase().getCatalog() != null) {
-            return new TableNameInfo(
-                    table.getDatabase().getCatalog().getName(),
-                    table.getDatabase().getFullName(),
-                    table.getName());
-        }
-        List<String> qualifier = scan.getQualifier();
-        if (qualifier.size() >= 2) {
-            return new TableNameInfo(qualifier.get(0), qualifier.get(1), table.getName());
-        }
-        if (qualifier.size() == 1) {
-            return new TableNameInfo(NameSpaceContext.INTERNAL_CATALOG_NAME, qualifier.get(0), table.getName());
-        }
-        return null;
     }
 
     /**
