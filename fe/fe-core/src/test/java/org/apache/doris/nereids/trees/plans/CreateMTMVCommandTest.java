@@ -753,4 +753,52 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         MTMV mtmv = getMtmv("ivm_deferred_mv");
         Assertions.assertTrue(mtmv.isIvm());
     }
+
+    @Test
+    public void testCreateIncrementalMVAllowsPartitionByWhenSupported() throws Exception {
+        createTable("CREATE TABLE test.ivm_partition_base (\n"
+                + " `k1` INT NOT NULL,\n"
+                + " `dt` DATE NOT NULL,\n"
+                + " `v1` INT\n"
+                + " ) ENGINE=OLAP\n"
+                + " DUPLICATE KEY(`k1`, `dt`)\n"
+                + " PARTITION BY RANGE(`dt`)\n"
+                + " (\n"
+                + " PARTITION `p202401` VALUES [(\"2024-01-01\"), (\"2024-02-01\")),\n"
+                + " PARTITION `p202402` VALUES [(\"2024-02-01\"), (\"2024-03-01\"))\n"
+                + " )\n"
+                + " DISTRIBUTED BY HASH(`k1`) BUCKETS 2\n"
+                + " PROPERTIES ('replication_num' = '1');");
+
+        CreateMTMVInfo info = getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_partition_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " PARTITION BY(`dt`)\n"
+                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS SELECT k1, dt, v1 FROM ivm_partition_base;");
+
+        Assertions.assertNotEquals(PartitionTableInfo.EMPTY, info.getPartitionTableInfo());
+        Assertions.assertEquals(2, info.getPartitionTableInfo().getPartitionDefs().size());
+    }
+
+    @Test
+    public void testCreateIncrementalMVRejectsUnsupportedPartitionIncremental() throws Exception {
+        createTable("create table test.ivm_partition_unsupported_base (\n"
+                + " k1 int,\n"
+                + " v1 int\n"
+                + ")\n"
+                + "duplicate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1');");
+
+        AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
+                () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_partition_unsupported_mv\n"
+                        + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                        + " PARTITION BY(`k1`)\n"
+                        + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
+                        + " PROPERTIES ('replication_num' = '1')\n"
+                        + " AS SELECT k1, v1 FROM ivm_partition_unsupported_base;"));
+        Assertions.assertTrue(ex.getMessage().contains("suitable"),
+                "unexpected message: " + ex.getMessage());
+    }
 }
