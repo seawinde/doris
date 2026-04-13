@@ -268,6 +268,27 @@ class IvmNormalizeMtmvTest {
     }
 
     @Test
+    void testExcludedMowTableUsesTransientRowId() {
+        OlapTable mowTable = PlanConstructor.newOlapTable(13, "excluded_mow", 0, KeysType.UNIQUE_KEYS);
+        TableProperty tableProperty = new TableProperty(new java.util.HashMap<>());
+        tableProperty.setEnableUniqueKeyMergeOnWrite(true);
+        mowTable.setTableProperty(tableProperty);
+        LogicalOlapScan mowScan = new LogicalOlapScan(
+                PlanConstructor.getNextRelationId(), mowTable, ImmutableList.of("db"));
+
+        JobContext jobContext = newJobContextForRoot(mowScan, true,
+                Collections.singleton(new TableNameInfo("internal", "db", "excluded_mow")));
+        Plan result = new IvmNormalizeMtmv().rewriteRoot(mowScan, jobContext);
+
+        Assertions.assertInstanceOf(LogicalProject.class, result);
+        LogicalProject<?> project = (LogicalProject<?>) result;
+        Alias rowIdAlias = (Alias) project.getProjects().get(0);
+        Assertions.assertInstanceOf(UuidNumeric.class, rowIdAlias.child());
+        IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
+        Assertions.assertFalse(normalizeResult.getRowIdDeterminism().values().iterator().next());
+    }
+
+    @Test
     void testUnsupportedPlanNodeThrows() {
         LogicalSort<Plan> sort = new LogicalSort<>(ImmutableList.of(), scan);
 

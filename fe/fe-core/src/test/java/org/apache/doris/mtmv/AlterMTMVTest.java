@@ -153,6 +153,22 @@ public class AlterMTMVTest extends TestWithFeService {
     }
 
     @Test
+    public void testAlterFromAutoToCompleteAllowed() throws Exception {
+        createDatabaseAndUse("alter_test_auto_complete");
+        createTable("CREATE TABLE alter_test_auto_complete.alt_base (k1 int, v1 int)\n"
+                + "DUPLICATE KEY(k1)\n"
+                + "DISTRIBUTED BY HASH(k1) BUCKETS 1\n"
+                + "PROPERTIES ('replication_num' = '1')");
+        createMvByNereids("CREATE MATERIALIZED VIEW alt_auto_mv_complete\n"
+                + " BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
+                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS SELECT k1, v1 FROM alt_base");
+        alterMv("ALTER MATERIALIZED VIEW alt_auto_mv_complete\n"
+                + " REFRESH COMPLETE ON MANUAL");
+    }
+
+    @Test
     public void testAlterFromAutoToIncrementalRejected() throws Exception {
         createDatabaseAndUse("alter_test5");
         createTable("CREATE TABLE alter_test5.alt_base5 (k1 int, v1 int)\n"

@@ -482,6 +482,11 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
      */
     private Pair<Expression, Boolean> buildRowId(OlapTable table, LogicalOlapScan scan,
             boolean isExcludedTriggerTable) {
+        if (isExcludedTriggerTable) {
+            // Excluded trigger tables never drive incremental maintenance. Use a transient row-id so CREATE / full
+            // refresh can still build the internal UNIQUE_KEYS schema, and let runtime IVM precheck fall back.
+            return Pair.of(new UuidNumeric(), false);
+        }
         KeysType keysType = table.getKeysType();
         if (keysType == KeysType.UNIQUE_KEYS && table.getEnableUniqueKeyMergeOnWrite()) {
             List<String> keyColNames = table.getBaseSchemaKeyColumns().stream()
@@ -497,11 +502,6 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
             return Pair.of(IvmUtil.buildRowIdHash(keySlots), true);
         }
         if (keysType == KeysType.DUP_KEYS) {
-            return Pair.of(new UuidNumeric(), false);
-        }
-        if (isExcludedTriggerTable) {
-            // Excluded trigger tables never drive incremental maintenance. Use a transient row-id so CREATE / full
-            // refresh can still build the internal UNIQUE_KEYS schema, and let runtime IVM precheck fall back.
             return Pair.of(new UuidNumeric(), false);
         }
         throw new AnalysisException("IVM does not support table key type: " + keysType

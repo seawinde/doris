@@ -19,6 +19,7 @@ package org.apache.doris.mtmv;
 
 import org.apache.doris.catalog.Env;
 import org.apache.doris.common.util.PropertyAnalyzer;
+import org.apache.doris.info.TableNameInfo;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.qe.ConnectContext;
@@ -123,6 +124,20 @@ public class MTMVPropertyUtil {
 
     private static void analyzeExcludedTriggerTables(String value) {
         // do nothing
+    }
+
+    public static Set<TableNameInfo> parseTableNameInfos(String value) {
+        Set<TableNameInfo> tableNameInfos = Sets.newHashSet();
+        if (StringUtils.isEmpty(value)) {
+            return tableNameInfos;
+        }
+        for (String tableName : value.split(",")) {
+            String trimmed = tableName.trim();
+            if (!trimmed.isEmpty()) {
+                tableNameInfos.add(new TableNameInfo(trimmed));
+            }
+        }
+        return tableNameInfos;
     }
 
     private static void analyzeDataChangeStillRewrittenTables(String value) {

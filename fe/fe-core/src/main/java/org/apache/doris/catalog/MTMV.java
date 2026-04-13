@@ -35,6 +35,7 @@ import org.apache.doris.mtmv.MTMVPartitionInfo;
 import org.apache.doris.mtmv.MTMVPartitionInfo.MTMVPartitionType;
 import org.apache.doris.mtmv.MTMVPartitionUtil;
 import org.apache.doris.mtmv.MTMVPlanUtil;
+import org.apache.doris.mtmv.MTMVPropertyUtil;
 import org.apache.doris.mtmv.MTMVRefreshEnum.MTMVRefreshState;
 import org.apache.doris.mtmv.MTMVRefreshEnum.MTMVState;
 import org.apache.doris.mtmv.MTMVRefreshInfo;
@@ -346,36 +347,20 @@ public class MTMV extends OlapTable {
     }
 
     public Set<TableNameInfo> getExcludedTriggerTables() {
-        Set<TableNameInfo> res = Sets.newHashSet();
         readMvLock();
         try {
-            if (StringUtils.isEmpty(mvProperties.get(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES))) {
-                return res;
-            }
-            String[] split = mvProperties.get(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES).split(",");
-            for (String alias : split) {
-                res.add(new TableNameInfo(alias));
-            }
-            return res;
+            return MTMVPropertyUtil.parseTableNameInfos(
+                    mvProperties.get(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES));
         } finally {
             readMvUnlock();
         }
     }
 
     public Set<TableNameInfo> getQueryRewriteConsistencyRelaxedTables() {
-        Set<TableNameInfo> res = Sets.newHashSet();
         readMvLock();
         try {
-            String stillRewrittenTables
-                    = mvProperties.get(PropertyAnalyzer.ASYNC_MV_QUERY_REWRITE_CONSISTENCY_RELAXED_TABLES);
-            if (StringUtils.isEmpty(stillRewrittenTables)) {
-                return res;
-            }
-            String[] split = stillRewrittenTables.split(",");
-            for (String alias : split) {
-                res.add(new TableNameInfo(alias));
-            }
-            return res;
+            return MTMVPropertyUtil.parseTableNameInfos(
+                    mvProperties.get(PropertyAnalyzer.ASYNC_MV_QUERY_REWRITE_CONSISTENCY_RELAXED_TABLES));
         } finally {
             readMvUnlock();
         }

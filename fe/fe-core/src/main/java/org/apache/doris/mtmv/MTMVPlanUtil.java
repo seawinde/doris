@@ -596,21 +596,11 @@ public class MTMVPlanUtil {
     }
 
     private static Set<TableNameInfo> getExcludedTriggerTables(Map<String, String> mvProperties) {
-        Set<TableNameInfo> excludedTriggerTables = Sets.newHashSet();
         if (mvProperties == null) {
-            return excludedTriggerTables;
+            return Sets.newHashSet();
         }
-        String propertyValue = mvProperties.get(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES);
-        if (propertyValue == null || propertyValue.trim().isEmpty()) {
-            return excludedTriggerTables;
-        }
-        for (String tableName : propertyValue.split(",")) {
-            String trimmed = tableName.trim();
-            if (!trimmed.isEmpty()) {
-                excludedTriggerTables.add(new TableNameInfo(trimmed));
-            }
-        }
-        return excludedTriggerTables;
+        return MTMVPropertyUtil.parseTableNameInfos(
+                mvProperties.get(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES));
     }
 
     private static void validateIncrementalBaseTableModels(MTMVRelation relation, Map<String, String> mvProperties) {
