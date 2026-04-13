@@ -154,8 +154,6 @@ public class CreateMTMVInfo extends CreateTableInfo {
                     + "The unique key is the hidden row-id column managed by IVM.");
         }
         analyzeQuery(ctx);
-        // Note: Base table key-type validation (MOW / DUP_KEYS only) is already
-        // enforced by IvmNormalizeMtmv.buildRowId() during analyzeQuery().
         this.partitionDesc = generatePartitionDesc(ctx);
         if (distribution == null) {
             throw new AnalysisException("Create async materialized view should contain distribution desc");

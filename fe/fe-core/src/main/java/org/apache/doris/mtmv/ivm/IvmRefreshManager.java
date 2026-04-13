@@ -81,6 +81,10 @@ public class IvmRefreshManager {
             return IvmRefreshResult.fallback(IvmFallbackReason.BINLOG_BROKEN,
                     "Stream binlog is marked as broken");
         }
+        if (!mtmv.getExcludedTriggerTables().isEmpty()) {
+            return IvmRefreshResult.fallback(IvmFallbackReason.PLAN_PATTERN_UNSUPPORTED,
+                    "IVM incremental refresh does not yet support excluded_trigger_tables");
+        }
         // return checkStreamSupport(mtmv);
         return IvmRefreshResult.success();
     }

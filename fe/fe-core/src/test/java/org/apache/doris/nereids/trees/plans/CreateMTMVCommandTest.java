@@ -626,7 +626,7 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     }
 
     // --- P0-2: INCREMENTAL MV base table model validation tests ---
-    // Key type validation is enforced by IvmNormalizeMtmv.buildRowId() during analyzeQuery.
+    // CREATE first validates base table models explicitly, then reruns analyzeQuery with IVM normalize enabled.
 
     @Test
     public void testCreateIncrementalMVAcceptsDupKeysBaseTable() throws Exception {
@@ -659,6 +659,40 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     }
 
     @Test
+    public void testCreateIncrementalMVRejectsUserSpecifiedUniqueKey() throws Exception {
+        createTable("create table test.ivm_explicit_key_base (k1 int, v1 int)\n"
+                + "duplicate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1');");
+        AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
+                () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_explicit_unique_key_mv\n"
+                        + " UNIQUE KEY(k1)\n"
+                        + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                        + " DISTRIBUTED BY HASH(k1) BUCKETS 1\n"
+                        + " PROPERTIES ('replication_num' = '1')\n"
+                        + " AS SELECT k1, v1 FROM ivm_explicit_key_base;"));
+        Assertions.assertTrue(ex.getMessage().contains("does not allow specifying key columns"),
+                "unexpected message: " + ex.getMessage());
+    }
+
+    @Test
+    public void testCreateIncrementalMVRejectsUserSpecifiedDuplicateKey() throws Exception {
+        createTable("create table test.ivm_explicit_dup_base (k1 int, v1 int)\n"
+                + "duplicate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1');");
+        AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
+                () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_explicit_dup_key_mv\n"
+                        + " DUPLICATE KEY(k1)\n"
+                        + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                        + " DISTRIBUTED BY HASH(k1) BUCKETS 1\n"
+                        + " PROPERTIES ('replication_num' = '1')\n"
+                        + " AS SELECT k1, v1 FROM ivm_explicit_dup_base;"));
+        Assertions.assertTrue(ex.getMessage().contains("does not allow specifying key columns"),
+                "unexpected message: " + ex.getMessage());
+    }
+
+    @Test
     public void testCreateIncrementalMVRejectsAggKeysBaseTable() throws Exception {
         createTable("create table test.ivm_agg_base (k1 int, v1 int SUM)\n"
                 + "aggregate key(k1)\n"
@@ -670,8 +704,23 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                         + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS SELECT k1 FROM ivm_agg_base;"));
-        Assertions.assertTrue(ex.getMessage().contains("IVM does not support table key type"),
+        Assertions.assertTrue(ex.getMessage().contains("requires base tables to be"),
                 "unexpected message: " + ex.getMessage());
+    }
+
+    @Test
+    public void testCreateIncrementalMVAllowsAggKeysInExcludedTriggerTables() throws Exception {
+        createTable("create table test.ivm_excluded_agg_base (k1 int, v1 int SUM)\n"
+                + "aggregate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1');");
+        createMtmv("CREATE MATERIALIZED VIEW ivm_excluded_agg_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
+                + " PROPERTIES ('replication_num' = '1', 'excluded_trigger_tables' = 'ivm_excluded_agg_base')\n"
+                + " AS SELECT k1 FROM ivm_excluded_agg_base;");
+        MTMV mtmv = getMtmv("ivm_excluded_agg_mv");
+        Assertions.assertTrue(mtmv.isIvm());
     }
 
     @Test
@@ -686,7 +735,7 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                         + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS SELECT k1, v1 FROM ivm_nomow_base;"));
-        Assertions.assertTrue(ex.getMessage().contains("IVM does not support table key type"),
+        Assertions.assertTrue(ex.getMessage().contains("enable Merge-On-Write"),
                 "unexpected message: " + ex.getMessage());
     }
 

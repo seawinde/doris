@@ -22,6 +22,7 @@ import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.KeysType;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.TableProperty;
+import org.apache.doris.info.TableNameInfo;
 import org.apache.doris.mtmv.ivm.IvmAggMeta;
 import org.apache.doris.mtmv.ivm.IvmAggMeta.AggTarget;
 import org.apache.doris.mtmv.ivm.IvmAggMeta.AggType;
@@ -70,6 +71,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Collections;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -247,6 +249,22 @@ class IvmNormalizeMtmvTest {
 
         Assertions.assertThrows(org.apache.doris.nereids.exceptions.AnalysisException.class,
                 () -> new IvmNormalizeMtmv().rewriteRoot(aggScan, newJobContextForScan(aggScan, true)));
+    }
+
+    @Test
+    void testExcludedAggKeyTableUsesTransientRowId() {
+        OlapTable aggTable = PlanConstructor.newOlapTable(12, "agg", 0, KeysType.AGG_KEYS);
+        LogicalOlapScan aggScan = new LogicalOlapScan(
+                PlanConstructor.getNextRelationId(), aggTable, ImmutableList.of("db"));
+
+        Plan result = new IvmNormalizeMtmv().rewriteRoot(aggScan, newJobContextForRoot(aggScan, true,
+                Collections.singleton(new TableNameInfo("internal", "db", "agg"))));
+
+        Assertions.assertInstanceOf(LogicalProject.class, result);
+        LogicalProject<?> project = (LogicalProject<?>) result;
+        Assertions.assertInstanceOf(Alias.class, project.getProjects().get(0));
+        Alias rowIdAlias = (Alias) project.getProjects().get(0);
+        Assertions.assertInstanceOf(UuidNumeric.class, rowIdAlias.child());
     }
 
     @Test
@@ -525,11 +543,17 @@ class IvmNormalizeMtmvTest {
     }
 
     private JobContext newJobContextForRoot(Plan root, boolean enableIvmNormalRewrite) {
+        return newJobContextForRoot(root, enableIvmNormalRewrite, Collections.emptySet());
+    }
+
+    private JobContext newJobContextForRoot(Plan root, boolean enableIvmNormalRewrite,
+            Set<TableNameInfo> excludedTriggerTables) {
         ConnectContext connectContext = MemoTestUtils.createConnectContext();
         SessionVariable sessionVariable = new SessionVariable();
         sessionVariable.setEnableIvmNormalRewrite(enableIvmNormalRewrite);
         connectContext.setSessionVariable(sessionVariable);
         StatementContext statementContext = new StatementContext(connectContext, null);
+        statementContext.setIvmExcludedTriggerTables(excludedTriggerTables);
         CascadesContext cascadesContext = CascadesContext.initContext(statementContext, root, PhysicalProperties.ANY);
         return new JobContext(cascadesContext, PhysicalProperties.ANY);
     }

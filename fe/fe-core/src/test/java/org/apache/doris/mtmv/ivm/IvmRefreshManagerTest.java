@@ -21,6 +21,7 @@ import org.apache.doris.catalog.MTMV;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.AnalysisException;
+import org.apache.doris.info.TableNameInfo;
 import org.apache.doris.mtmv.BaseTableInfo;
 import org.apache.doris.mtmv.MTMVRelation;
 import org.apache.doris.mtmv.MTMVUtil;
@@ -38,6 +39,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Set;
 
 public class IvmRefreshManagerTest {
 
@@ -122,6 +124,9 @@ public class IvmRefreshManagerTest {
             {
                 mtmv.getIvmInfo();
                 result = ivmInfo;
+                minTimes = 1;
+                mtmv.getExcludedTriggerTables();
+                result = Collections.emptySet();
             }
         };
 
@@ -138,6 +143,32 @@ public class IvmRefreshManagerTest {
     }
 
     @Test
+    public void testManagerReturnsFallbackWhenExcludedTriggerTablesConfigured(@Mocked MTMV mtmv) {
+        IvmInfo ivmInfo = new IvmInfo();
+        Set<TableNameInfo> excludedTriggerTables = Sets.newHashSet(new TableNameInfo("agg_t"));
+        new Expectations() {
+            {
+                mtmv.getIvmInfo();
+                result = ivmInfo;
+                minTimes = 1;
+                mtmv.getExcludedTriggerTables();
+                result = excludedTriggerTables;
+            }
+        };
+
+        TestDeltaExecutor executor = new TestDeltaExecutor();
+        TestIvmRefreshManager manager = new TestIvmRefreshManager(executor,
+                newContext(mtmv), Collections.emptyList());
+        manager.useSuperPrecheck = true;
+
+        IvmRefreshResult result = manager.doRefresh(mtmv);
+
+        Assertions.assertFalse(result.isSuccess());
+        Assertions.assertEquals(IvmFallbackReason.PLAN_PATTERN_UNSUPPORTED, result.getFallbackReason());
+        Assertions.assertFalse(executor.executeCalled);
+    }
+
+    @Test
     public void testManagerReturnsStreamUnsupportedWithoutBinding(@Mocked MTMV mtmv,
             @Mocked MTMVRelation relation, @Mocked OlapTable olapTable) {
         IvmInfo ivmInfo = new IvmInfo();
@@ -147,6 +178,8 @@ public class IvmRefreshManagerTest {
                 mtmv.getIvmInfo();
                 result = ivmInfo;
                 minTimes = 1;
+                mtmv.getExcludedTriggerTables();
+                result = Collections.emptySet();
                 mtmv.getRelation();
                 result = relation;
                 relation.getBaseTablesOneLevelAndFromView();
@@ -194,6 +227,8 @@ public class IvmRefreshManagerTest {
                 mtmv.getIvmInfo();
                 result = ivmInfo;
                 minTimes = 1;
+                mtmv.getExcludedTriggerTables();
+                result = Collections.emptySet();
                 mtmv.getRelation();
                 result = relation;
                 relation.getBaseTablesOneLevelAndFromView();
