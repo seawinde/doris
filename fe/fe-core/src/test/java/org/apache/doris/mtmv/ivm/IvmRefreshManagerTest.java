@@ -19,11 +19,9 @@ package org.apache.doris.mtmv.ivm;
 
 import org.apache.doris.catalog.MTMV;
 import org.apache.doris.common.AnalysisException;
-import org.apache.doris.info.TableNameInfo;
 import org.apache.doris.nereids.trees.plans.commands.Command;
 import org.apache.doris.qe.ConnectContext;
 
-import com.google.common.collect.Sets;
 import mockit.Expectations;
 import mockit.Mocked;
 import org.junit.jupiter.api.Assertions;
@@ -31,7 +29,6 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.Set;
 
 public class IvmRefreshManagerTest {
 
@@ -135,16 +132,15 @@ public class IvmRefreshManagerTest {
     }
 
     @Test
-    public void testManagerReturnsFallbackWhenExcludedTriggerTablesConfigured(@Mocked MTMV mtmv) {
+    public void testManagerPrecheckPassesWhenExcludedTriggerTablesConfigured(@Mocked MTMV mtmv) {
         IvmInfo ivmInfo = new IvmInfo();
-        Set<TableNameInfo> excludedTriggerTables = Sets.newHashSet(new TableNameInfo("agg_t"));
         new Expectations() {
             {
                 mtmv.getIvmInfo();
                 result = ivmInfo;
                 minTimes = 1;
                 mtmv.getExcludedTriggerTables();
-                result = excludedTriggerTables;
+                result = Collections.singleton(new org.apache.doris.info.TableNameInfo("agg_t"));
             }
         };
 
