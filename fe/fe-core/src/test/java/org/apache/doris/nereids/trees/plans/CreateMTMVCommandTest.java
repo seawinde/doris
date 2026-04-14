@@ -890,4 +890,28 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         Assertions.assertTrue(ex.getMessage().contains("suitable"),
                 "unexpected message: " + ex.getMessage());
     }
+
+    @Test
+    public void testAlterExcludedTriggerTablesRejectsIncompatibleModel() throws Exception {
+        createTable("create table test.ivm_alter_agg_base (k1 int, v1 int SUM)\n"
+                + "aggregate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1');");
+        createMtmv("CREATE MATERIALIZED VIEW ivm_alter_excluded_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
+                + " PROPERTIES ('replication_num' = '1', 'excluded_trigger_tables' = 'ivm_alter_agg_base')\n"
+                + " AS SELECT k1 FROM ivm_alter_agg_base;");
+        MTMV mtmv = getMtmv("ivm_alter_excluded_mv");
+        Assertions.assertTrue(mtmv.isIvm());
+
+        // Removing the AGG table from excluded_trigger_tables should fail validation
+        AnalysisException ex = Assertions.assertThrows(AnalysisException.class, () -> {
+            LogicalPlan plan = new NereidsParser().parseSingle(
+                    "ALTER MATERIALIZED VIEW ivm_alter_excluded_mv SET ('excluded_trigger_tables' = '')");
+            ((org.apache.doris.nereids.trees.plans.commands.AlterMTMVCommand) plan).run(connectContext, null);
+        });
+        Assertions.assertTrue(ex.getMessage().contains("requires base tables to be"),
+                "unexpected message: " + ex.getMessage());
+    }
 }

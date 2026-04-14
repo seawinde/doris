@@ -600,7 +600,7 @@ public class MTMVPlanUtil {
                 mvProperties.get(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES));
     }
 
-    private static void validateIncrementalBaseTableModels(MTMVRelation relation, Map<String, String> mvProperties) {
+    public static void validateIncrementalBaseTableModels(MTMVRelation relation, Map<String, String> mvProperties) {
         Set<TableNameInfo> excludedTriggerTables = getExcludedTriggerTables(mvProperties);
         if (relation == null || relation.getBaseTablesOneLevelAndFromView() == null) {
             return;
