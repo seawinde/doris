@@ -504,9 +504,20 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
         if (keysType == KeysType.DUP_KEYS) {
             return Pair.of(new UuidNumeric(), false);
         }
-        throw new AnalysisException("IVM does not support table key type: " + keysType
-                + " for table: " + table.getName()
-                + ". Only MOW (UNIQUE_KEYS with merge-on-write) and DUP_KEYS are supported.");
+        if (keysType == KeysType.UNIQUE_KEYS) {
+            throw new AnalysisException(
+                    "INCREMENTAL materialized view requires UNIQUE_KEYS base tables "
+                            + "to enable Merge-On-Write. Table '"
+                            + table.getName() + "' has MOW disabled."
+                            + " If this table does not participate in incremental refresh, "
+                            + "add it to 'excluded_trigger_tables'.");
+        }
+        throw new AnalysisException(
+                "INCREMENTAL materialized view requires base tables to be "
+                        + "UNIQUE_KEYS with Merge-On-Write or DUP_KEYS. Table '"
+                        + table.getName() + "' is " + keysType
+                        + ". If this table does not participate in incremental refresh, "
+                        + "add it to 'excluded_trigger_tables'.");
     }
 
     private boolean isExcludedTriggerTable(OlapTable table) {
