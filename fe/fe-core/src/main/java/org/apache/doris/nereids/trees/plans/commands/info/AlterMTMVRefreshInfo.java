@@ -18,8 +18,11 @@
 package org.apache.doris.nereids.trees.plans.commands.info;
 
 import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.MTMV;
+import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.UserException;
 import org.apache.doris.info.TableNameInfo;
+import org.apache.doris.mtmv.MTMVRefreshEnum.RefreshMethod;
 import org.apache.doris.mtmv.MTMVRefreshInfo;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.qe.ConnectContext;
@@ -43,6 +46,35 @@ public class AlterMTMVRefreshInfo extends AlterMTMVInfo {
     public void analyze(ConnectContext ctx) throws AnalysisException {
         super.analyze(ctx);
         refreshInfo.validate();
+        validateRefreshMethodCompat();
+    }
+
+    private void validateRefreshMethodCompat() {
+        try {
+            MTMV mtmv = (MTMV) Env.getCurrentInternalCatalog()
+                    .getDbOrDdlException(getMvName().getDb())
+                    .getTableOrMetaException(getMvName().getTbl(), TableIf.TableType.MATERIALIZED_VIEW);
+            RefreshMethod oldMethod = mtmv.getRefreshInfo().getRefreshMethod();
+            RefreshMethod newMethod = refreshInfo.getRefreshMethod();
+            if (newMethod != null) {
+                if (newMethod == RefreshMethod.INCREMENTAL
+                        && oldMethod != RefreshMethod.INCREMENTAL) {
+                    throw new AnalysisException(
+                            "Cannot ALTER refresh method to INCREMENTAL. "
+                            + "Please recreate the materialized view.");
+                }
+                if (newMethod != RefreshMethod.INCREMENTAL
+                        && oldMethod == RefreshMethod.INCREMENTAL) {
+                    throw new AnalysisException(
+                            "Cannot ALTER refresh method from INCREMENTAL to "
+                            + newMethod + ". Please recreate the materialized view.");
+                }
+            }
+        } catch (AnalysisException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new AnalysisException(e.getMessage(), e);
+        }
     }
 
     @Override
