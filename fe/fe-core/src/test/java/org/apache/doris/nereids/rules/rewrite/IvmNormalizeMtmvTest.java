@@ -17,11 +17,15 @@
 
 package org.apache.doris.nereids.rules.rewrite;
 
+import org.apache.doris.catalog.AggregateType;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
+import org.apache.doris.catalog.HashDistributionInfo;
 import org.apache.doris.catalog.KeysType;
 import org.apache.doris.catalog.OlapTable;
+import org.apache.doris.catalog.PartitionInfo;
 import org.apache.doris.catalog.TableProperty;
+import org.apache.doris.catalog.Type;
 import org.apache.doris.info.TableNameInfo;
 import org.apache.doris.mtmv.ivm.IvmAggMeta;
 import org.apache.doris.mtmv.ivm.IvmAggMeta.AggTarget;
@@ -62,6 +66,7 @@ import org.apache.doris.nereids.util.PlanConstructor;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.SessionVariable;
 import org.apache.doris.thrift.TPartialUpdateNewRowPolicy;
+import org.apache.doris.thrift.TStorageType;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -253,12 +258,12 @@ class IvmNormalizeMtmvTest {
 
     @Test
     void testExcludedAggKeyTableUsesTransientRowId() {
-        OlapTable aggTable = PlanConstructor.newOlapTable(12, "agg", 0, KeysType.AGG_KEYS);
+        OlapTable aggTable = newOlapTableWithBoundDb(12, "agg", KeysType.AGG_KEYS, "test");
         LogicalOlapScan aggScan = new LogicalOlapScan(
-                PlanConstructor.getNextRelationId(), aggTable, ImmutableList.of("db"));
+                PlanConstructor.getNextRelationId(), aggTable, ImmutableList.of("test"));
 
         Plan result = new IvmNormalizeMtmv().rewriteRoot(aggScan, newJobContextForRoot(aggScan, true,
-                Collections.singleton(new TableNameInfo("internal", "db", "agg"))));
+                Collections.singleton(new TableNameInfo("internal", "test", "agg"))));
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
         LogicalProject<?> project = (LogicalProject<?>) result;
@@ -269,15 +274,15 @@ class IvmNormalizeMtmvTest {
 
     @Test
     void testExcludedMowTableUsesTransientRowId() {
-        OlapTable mowTable = PlanConstructor.newOlapTable(13, "excluded_mow", 0, KeysType.UNIQUE_KEYS);
+        OlapTable mowTable = newOlapTableWithBoundDb(13, "excluded_mow", KeysType.UNIQUE_KEYS, "test");
         TableProperty tableProperty = new TableProperty(new java.util.HashMap<>());
         tableProperty.setEnableUniqueKeyMergeOnWrite(true);
         mowTable.setTableProperty(tableProperty);
         LogicalOlapScan mowScan = new LogicalOlapScan(
-                PlanConstructor.getNextRelationId(), mowTable, ImmutableList.of("db"));
+                PlanConstructor.getNextRelationId(), mowTable, ImmutableList.of("test"));
 
         JobContext jobContext = newJobContextForRoot(mowScan, true,
-                Collections.singleton(new TableNameInfo("internal", "db", "excluded_mow")));
+                Collections.singleton(new TableNameInfo("internal", "test", "excluded_mow")));
         Plan result = new IvmNormalizeMtmv().rewriteRoot(mowScan, jobContext);
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
@@ -620,5 +625,24 @@ class IvmNormalizeMtmvTest {
         statementContext.setIvmExcludedTriggerTables(excludedTriggerTables);
         CascadesContext cascadesContext = CascadesContext.initContext(statementContext, root, PhysicalProperties.ANY);
         return new JobContext(cascadesContext, PhysicalProperties.ANY);
+    }
+
+    private OlapTable newOlapTableWithBoundDb(long tableId, String tableName, KeysType keysType, String dbName) {
+        Database database = new Database(1L, dbName);
+        List<Column> columns = ImmutableList.of(
+                new Column("id", Type.INT, true, AggregateType.NONE, "0", ""),
+                new Column("name", Type.STRING, true, AggregateType.NONE, "", ""));
+        HashDistributionInfo distributionInfo = new HashDistributionInfo(3, ImmutableList.of(columns.get(0)));
+        OlapTable table = new OlapTable(tableId, tableName, columns, keysType,
+                new PartitionInfo(), distributionInfo) {
+            @Override
+            public Database getDatabase() {
+                return database;
+            }
+        };
+        table.setIndexMeta(-1, tableName, table.getFullSchema(), 0, 0, (short) 0,
+                TStorageType.COLUMN, keysType);
+        table.setQualifiedDbName(dbName);
+        return table;
     }
 }

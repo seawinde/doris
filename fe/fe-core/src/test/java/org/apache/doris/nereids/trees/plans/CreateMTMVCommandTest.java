@@ -748,15 +748,15 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     }
 
     @Test
-    public void testCreateIncrementalMVRejectsUserSpecifiedUniqueKey() throws Exception {
+    public void testCreateIncrementalMVRejectsUserSpecifiedKeyColumns() throws Exception {
         createTable("create table test.ivm_explicit_key_base (k1 int, v1 int)\n"
                 + "duplicate key(k1)\n"
                 + "distributed by hash(k1) buckets 1\n"
                 + "properties('replication_num' = '1');");
         AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
                 () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_explicit_unique_key_mv\n"
-                        + " UNIQUE KEY(k1)\n"
                         + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                        + " KEY(k1)\n"
                         + " DISTRIBUTED BY HASH(k1) BUCKETS 1\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS SELECT k1, v1 FROM ivm_explicit_key_base;"));
@@ -772,8 +772,8 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "properties('replication_num' = '1');");
         AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
                 () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_explicit_dup_key_mv\n"
-                        + " DUPLICATE KEY(k1)\n"
                         + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                        + " DUPLICATE KEY(k1)\n"
                         + " DISTRIBUTED BY HASH(k1) BUCKETS 1\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS SELECT k1, v1 FROM ivm_explicit_dup_base;"));
