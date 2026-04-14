@@ -21,12 +21,16 @@ import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.KeysType;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.common.Pair;
+import org.apache.doris.info.TableNameInfo;
+import org.apache.doris.info.TableNameInfoUtils;
+import org.apache.doris.mtmv.MTMVPartitionUtil;
 import org.apache.doris.mtmv.ivm.IvmAggMeta;
 import org.apache.doris.mtmv.ivm.IvmAggMeta.AggTarget;
 import org.apache.doris.mtmv.ivm.IvmAggMeta.AggType;
 import org.apache.doris.mtmv.ivm.IvmAggMeta.StateKey;
 import org.apache.doris.mtmv.ivm.IvmNormalizeResult;
 import org.apache.doris.mtmv.ivm.IvmUtil;
+import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.jobs.JobContext;
 import org.apache.doris.nereids.trees.expressions.Alias;
@@ -84,6 +88,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
             ImmutableSet.of(Count.class, Sum.class, Avg.class, Min.class, Max.class);
 
     private final IvmNormalizeResult normalizeResult = new IvmNormalizeResult();
+    private StatementContext statementContext;
 
     @Override
     public Plan rewriteRoot(Plan plan, JobContext jobContext) {
@@ -95,6 +100,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
         if (jobContext.getCascadesContext().getIvmNormalizeResult().isPresent()) {
             return plan;
         }
+        statementContext = jobContext.getCascadesContext().getStatementContext();
         jobContext.getCascadesContext().setIvmNormalizeResult(normalizeResult);
         Plan result = plan.accept(this, true);
         normalizeResult.setNormalizedPlan(result);
@@ -112,7 +118,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
     @Override
     public Plan visitLogicalOlapScan(LogicalOlapScan scan, Boolean isFirstNonSink) {
         OlapTable table = scan.getTable();
-        Pair<Expression, Boolean> rowId = buildRowId(table, scan);
+        Pair<Expression, Boolean> rowId = buildRowId(table, scan, isExcludedTriggerTable(table));
         Alias rowIdAlias = new Alias(rowId.first, Column.IVM_ROW_ID_COL);
         normalizeResult.addRowId(rowIdAlias.toSlot(), rowId.second);
         List<NamedExpression> outputs = ImmutableList.<NamedExpression>builder()
@@ -462,7 +468,13 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
      * - DUP_KEYS: (UuidNumeric(), false)    — random per insert
      * - Other key types: throws AnalysisException
      */
-    private Pair<Expression, Boolean> buildRowId(OlapTable table, LogicalOlapScan scan) {
+    private Pair<Expression, Boolean> buildRowId(OlapTable table, LogicalOlapScan scan,
+            boolean isExcludedTriggerTable) {
+        if (isExcludedTriggerTable) {
+            // Excluded trigger tables never drive incremental maintenance. Use a transient row-id so CREATE / full
+            // refresh can still build the internal UNIQUE_KEYS schema, and let runtime IVM precheck fall back.
+            return Pair.of(new UuidNumeric(), false);
+        }
         KeysType keysType = table.getKeysType();
         if (keysType == KeysType.UNIQUE_KEYS && table.getEnableUniqueKeyMergeOnWrite()) {
             List<String> keyColNames = table.getBaseSchemaKeyColumns().stream()
@@ -480,9 +492,31 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
         if (keysType == KeysType.DUP_KEYS) {
             return Pair.of(new UuidNumeric(), false);
         }
-        throw new AnalysisException("IVM does not support table key type: " + keysType
-                + " for table: " + table.getName()
-                + ". Only MOW (UNIQUE_KEYS with merge-on-write) and DUP_KEYS are supported.");
+        if (keysType == KeysType.UNIQUE_KEYS) {
+            throw new AnalysisException(
+                    "INCREMENTAL materialized view requires UNIQUE_KEYS base tables "
+                            + "to enable Merge-On-Write. Table '"
+                            + table.getName() + "' has MOW disabled."
+                            + " If this table does not participate in incremental refresh, "
+                            + "add it to 'excluded_trigger_tables'.");
+        }
+        throw new AnalysisException(
+                "INCREMENTAL materialized view requires base tables to be "
+                        + "UNIQUE_KEYS with Merge-On-Write or DUP_KEYS. Table '"
+                        + table.getName() + "' is " + keysType
+                        + ". If this table does not participate in incremental refresh, "
+                        + "add it to 'excluded_trigger_tables'.");
+    }
+
+    private boolean isExcludedTriggerTable(OlapTable table) {
+        if (statementContext == null || statementContext.getIvmExcludedTriggerTables().isEmpty()) {
+            return false;
+        }
+        TableNameInfo tableNameInfo = TableNameInfoUtils.fromTableOrNull(table);
+        if (tableNameInfo == null) {
+            return false;
+        }
+        return MTMVPartitionUtil.isTableExcluded(statementContext.getIvmExcludedTriggerTables(), tableNameInfo);
     }
 
     /**

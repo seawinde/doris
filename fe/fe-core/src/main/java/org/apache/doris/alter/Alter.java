@@ -51,6 +51,7 @@ import org.apache.doris.datasource.iceberg.IcebergExternalTable;
 import org.apache.doris.info.TableNameInfo;
 import org.apache.doris.info.TableNameInfoUtils;
 import org.apache.doris.mtmv.BaseTableInfo;
+import org.apache.doris.mtmv.MTMVPlanUtil;
 import org.apache.doris.nereids.trees.plans.commands.AlterSystemCommand;
 import org.apache.doris.nereids.trees.plans.commands.AlterTableCommand;
 import org.apache.doris.nereids.trees.plans.commands.AlterViewCommand;
@@ -1250,6 +1251,14 @@ public class Alter {
                     mtmv.alterStatus(alterMTMV.getStatus());
                     break;
                 case ALTER_PROPERTY:
+                    if (!isReplay && mtmv.isIvm()
+                            && alterMTMV.getMvProperties().containsKey(
+                                    PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES)) {
+                        Map<String, String> mergedMvProps = Maps.newHashMap(mtmv.getMvProperties());
+                        mergedMvProps.putAll(alterMTMV.getMvProperties());
+                        MTMVPlanUtil.validateIncrementalBaseTableModels(
+                                mtmv.getRelation(), mergedMvProps);
+                    }
                     mtmv.alterMvProperties(alterMTMV.getMvProperties());
                     break;
                 case ADD_TASK:

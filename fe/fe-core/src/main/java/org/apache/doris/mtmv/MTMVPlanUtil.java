@@ -30,6 +30,7 @@ import org.apache.doris.catalog.DistributionInfo.DistributionInfoType;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.KeysType;
 import org.apache.doris.catalog.MTMV;
+import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.ScalarType;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.TableIf.TableType;
@@ -44,6 +45,7 @@ import org.apache.doris.common.util.PropertyAnalyzer;
 import org.apache.doris.common.util.Util;
 import org.apache.doris.datasource.CatalogIf;
 import org.apache.doris.datasource.ExternalTable;
+import org.apache.doris.info.TableNameInfo;
 import org.apache.doris.job.exception.JobException;
 import org.apache.doris.job.task.AbstractTask;
 import org.apache.doris.mtmv.MTMVPartitionInfo.MTMVPartitionType;
@@ -496,7 +498,26 @@ public class MTMVPlanUtil {
             MTMVPartitionDefinition mvPartitionDefinition, DistributionDescriptor distribution,
             List<SimpleColumnDefinition> simpleColumnDefinitions, Map<String, String> properties, List<String> keys,
             LogicalPlan logicalQuery, boolean isIvm) throws UserException {
-        try (StatementContext statementContext = ctx.getStatementContext()) {
+        if (!isIvm) {
+            return analyzeQueryInternal(ctx, mvProperties, mvPartitionDefinition, distribution,
+                    simpleColumnDefinitions, properties, keys, logicalQuery, false, Sets.newHashSet());
+        }
+        MTMVAnalyzeQueryInfo queryInfo = analyzeQueryInternal(ctx, mvProperties, mvPartitionDefinition, distribution,
+                simpleColumnDefinitions, properties, keys, logicalQuery, true,
+                getExcludedTriggerTables(mvProperties));
+        validateIncrementalBaseTableModels(queryInfo.getRelation(), mvProperties);
+        return queryInfo;
+    }
+
+    private static MTMVAnalyzeQueryInfo analyzeQueryInternal(ConnectContext ctx, Map<String, String> mvProperties,
+            MTMVPartitionDefinition mvPartitionDefinition, DistributionDescriptor distribution,
+            List<SimpleColumnDefinition> simpleColumnDefinitions, Map<String, String> properties, List<String> keys,
+            LogicalPlan logicalQuery, boolean isIvm, Set<TableNameInfo> excludedTriggerTables)
+            throws UserException {
+        StatementContext originalStatementContext = ctx.getStatementContext();
+        try (StatementContext statementContext = new StatementContext(ctx, null)) {
+            statementContext.setIvmExcludedTriggerTables(excludedTriggerTables);
+            ctx.setStatementContext(statementContext);
             NereidsPlanner planner = new NereidsPlanner(statementContext);
             // this is for expression column name infer when not use alias
             LogicalSink<Plan> logicalSink = new UnboundResultSink<>(logicalQuery);
@@ -566,6 +587,60 @@ public class MTMVPlanUtil {
                         queryInfo::setIvmNormalizeResult);
             }
             return queryInfo;
+        } finally {
+            ctx.setStatementContext(originalStatementContext);
+        }
+    }
+
+    private static Set<TableNameInfo> getExcludedTriggerTables(Map<String, String> mvProperties) {
+        if (mvProperties == null) {
+            return Sets.newHashSet();
+        }
+        return MTMVPropertyUtil.parseTableNameInfos(
+                mvProperties.get(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES));
+    }
+
+    public static void validateIncrementalBaseTableModels(MTMVRelation relation, Map<String, String> mvProperties) {
+        Set<TableNameInfo> excludedTriggerTables = getExcludedTriggerTables(mvProperties);
+        if (relation == null || relation.getBaseTablesOneLevelAndFromView() == null) {
+            return;
+        }
+        for (BaseTableInfo baseTableInfo : relation.getBaseTablesOneLevelAndFromView()) {
+            final TableIf table;
+            try {
+                table = MTMVUtil.getTable(baseTableInfo);
+            } catch (org.apache.doris.common.AnalysisException e) {
+                throw new AnalysisException(e.getMessage(), e);
+            }
+            TableNameInfo tableNameInfo = new TableNameInfo(baseTableInfo.getCtlName(),
+                    baseTableInfo.getDbName(), baseTableInfo.getTableName());
+            if (MTMVPartitionUtil.isTableExcluded(excludedTriggerTables, tableNameInfo)) {
+                continue;
+            }
+            if (!(table instanceof OlapTable)) {
+                throw new AnalysisException(
+                        "INCREMENTAL materialized view only supports OlapTable base tables. "
+                                + "Table '" + table.getName() + "' is " + table.getType() + ".");
+            }
+            OlapTable olapTable = (OlapTable) table;
+            if (olapTable.getKeysType() != KeysType.UNIQUE_KEYS
+                    && olapTable.getKeysType() != KeysType.DUP_KEYS) {
+                throw new AnalysisException(
+                        "INCREMENTAL materialized view requires base tables to be "
+                                + "UNIQUE_KEYS with Merge-On-Write or DUP_KEYS. Table '"
+                                + olapTable.getName() + "' is " + olapTable.getKeysType()
+                                + ". If this table does not participate in incremental refresh, "
+                                + "add it to 'excluded_trigger_tables'.");
+            }
+            if (olapTable.getKeysType() == KeysType.UNIQUE_KEYS
+                    && !olapTable.getEnableUniqueKeyMergeOnWrite()) {
+                throw new AnalysisException(
+                        "INCREMENTAL materialized view requires UNIQUE_KEYS base tables "
+                                + "to enable Merge-On-Write. Table '"
+                                + olapTable.getName() + "' has MOW disabled."
+                                + " If this table does not participate in incremental refresh, "
+                                + "add it to 'excluded_trigger_tables'.");
+            }
         }
     }
 

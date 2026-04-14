@@ -34,6 +34,7 @@ import org.apache.doris.datasource.mvcc.MvccSnapshot;
 import org.apache.doris.datasource.mvcc.MvccTable;
 import org.apache.doris.datasource.mvcc.MvccTableInfo;
 import org.apache.doris.foundation.format.FormatOptions;
+import org.apache.doris.info.TableNameInfo;
 import org.apache.doris.mtmv.BaseTableInfo;
 import org.apache.doris.nereids.analyzer.UnboundRelation;
 import org.apache.doris.nereids.exceptions.AnalysisException;
@@ -320,6 +321,7 @@ public class StatementContext implements Closeable {
 
     private final Set<CTEId> mustInlineCTE = new HashSet<>();
     private final Set<String> usedAIResourceNames = new LinkedHashSet<>();
+    private final Set<TableNameInfo> ivmExcludedTriggerTables = new HashSet<>();
 
     private final Map<String, Integer> lowerCaseTableNamesCache = Maps.newHashMap();
     private final Map<String, Integer> lowerCaseDatabaseNamesCache = Maps.newHashMap();
@@ -413,6 +415,17 @@ public class StatementContext implements Closeable {
 
     public Map<List<String>, TableIf> getOneLevelTables() {
         return oneLevelTables;
+    }
+
+    public Set<TableNameInfo> getIvmExcludedTriggerTables() {
+        return ivmExcludedTriggerTables;
+    }
+
+    public void setIvmExcludedTriggerTables(Set<TableNameInfo> excludedTriggerTables) {
+        ivmExcludedTriggerTables.clear();
+        if (excludedTriggerTables != null) {
+            ivmExcludedTriggerTables.addAll(excludedTriggerTables);
+        }
     }
 
     public Set<MTMV> getCandidateMTMVs() {
