@@ -502,14 +502,11 @@ public class MTMVPlanUtil {
             return analyzeQueryInternal(ctx, mvProperties, mvPartitionDefinition, distribution,
                     simpleColumnDefinitions, properties, keys, logicalQuery, false, Sets.newHashSet());
         }
-        Map<String, String> preAnalyzeProperties = properties == null ? Maps.newHashMap() : Maps.newHashMap(properties);
-        List<String> preAnalyzeKeys = keys == null ? Lists.newArrayList() : Lists.newArrayList(keys);
-        MTMVAnalyzeQueryInfo preAnalyzeQueryInfo = analyzeQueryInternal(ctx, mvProperties, mvPartitionDefinition,
-                distribution, simpleColumnDefinitions, preAnalyzeProperties, preAnalyzeKeys, logicalQuery,
-                false, Sets.newHashSet());
-        validateIncrementalBaseTableModels(preAnalyzeQueryInfo.getRelation(), mvProperties);
-        return analyzeQueryInternal(ctx, mvProperties, mvPartitionDefinition, distribution, simpleColumnDefinitions,
-                properties, keys, logicalQuery, true, getExcludedTriggerTables(mvProperties));
+        MTMVAnalyzeQueryInfo queryInfo = analyzeQueryInternal(ctx, mvProperties, mvPartitionDefinition, distribution,
+                simpleColumnDefinitions, properties, keys, logicalQuery, true,
+                getExcludedTriggerTables(mvProperties));
+        validateIncrementalBaseTableModels(queryInfo.getRelation(), mvProperties);
+        return queryInfo;
     }
 
     private static MTMVAnalyzeQueryInfo analyzeQueryInternal(ConnectContext ctx, Map<String, String> mvProperties,
