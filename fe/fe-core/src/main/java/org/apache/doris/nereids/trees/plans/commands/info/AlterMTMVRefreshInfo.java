@@ -56,18 +56,20 @@ public class AlterMTMVRefreshInfo extends AlterMTMVInfo {
                     .getTableOrMetaException(getMvName().getTbl(), TableIf.TableType.MATERIALIZED_VIEW);
             RefreshMethod oldMethod = mtmv.getRefreshInfo().getRefreshMethod();
             RefreshMethod newMethod = refreshInfo.getRefreshMethod();
-            if (newMethod != null) {
-                if (newMethod == RefreshMethod.INCREMENTAL
-                        && oldMethod != RefreshMethod.INCREMENTAL) {
+            if (newMethod != null && newMethod != oldMethod) {
+                // COMPLETE and INCREMENTAL cannot be changed to each other
+                if ((oldMethod == RefreshMethod.COMPLETE && newMethod == RefreshMethod.INCREMENTAL)
+                        || (oldMethod == RefreshMethod.INCREMENTAL && newMethod == RefreshMethod.COMPLETE)) {
                     throw new AnalysisException(
-                            "Cannot ALTER refresh method to INCREMENTAL. "
+                            "Cannot ALTER refresh method between COMPLETE and INCREMENTAL. "
                             + "Please recreate the materialized view.");
                 }
-                if (newMethod != RefreshMethod.INCREMENTAL
-                        && oldMethod == RefreshMethod.INCREMENTAL) {
+                // AUTO cannot be changed to COMPLETE or INCREMENTAL
+                if (oldMethod == RefreshMethod.AUTO
+                        && (newMethod == RefreshMethod.COMPLETE || newMethod == RefreshMethod.INCREMENTAL)) {
                     throw new AnalysisException(
-                            "Cannot ALTER refresh method from INCREMENTAL to "
-                            + newMethod + ". Please recreate the materialized view.");
+                            "Cannot ALTER refresh method from AUTO to " + newMethod + ". "
+                            + "Please recreate the materialized view.");
                 }
             }
         } catch (AnalysisException e) {
