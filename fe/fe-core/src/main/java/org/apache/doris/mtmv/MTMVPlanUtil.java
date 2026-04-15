@@ -514,10 +514,13 @@ public class MTMVPlanUtil {
             List<SimpleColumnDefinition> simpleColumnDefinitions, Map<String, String> properties, List<String> keys,
             LogicalPlan logicalQuery, boolean isIvm, Set<TableNameInfo> excludedTriggerTables)
             throws UserException {
-        StatementContext originalStatementContext = ctx.getStatementContext();
-        try (StatementContext statementContext = new StatementContext(ctx, null)) {
+        // Reuse the StatementContext already on the ConnectContext (set by NereidsParser during
+        // SQL parsing or by the user session). Do NOT create a new StatementContext here — the
+        // IVM refresh pipeline reads ExprId tracking from ctx.getStatementContext() after this
+        // method returns (IvmRefreshManager.doRefreshInternal reads exprIdStart). Creating a
+        // separate StatementContext and restoring the original would lose ExprId allocations.
+        try (StatementContext statementContext = ctx.getStatementContext()) {
             statementContext.setIvmExcludedTriggerTables(excludedTriggerTables);
-            ctx.setStatementContext(statementContext);
             NereidsPlanner planner = new NereidsPlanner(statementContext);
             // this is for expression column name infer when not use alias
             LogicalSink<Plan> logicalSink = new UnboundResultSink<>(logicalQuery);
@@ -587,8 +590,6 @@ public class MTMVPlanUtil {
                         queryInfo::setIvmNormalizeResult);
             }
             return queryInfo;
-        } finally {
-            ctx.setStatementContext(originalStatementContext);
         }
     }
 
