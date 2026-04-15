@@ -318,7 +318,7 @@ public class StatementContext implements Closeable {
 
     private final Set<CTEId> mustInlineCTE = new HashSet<>();
     private final Set<String> usedAIResourceNames = new LinkedHashSet<>();
-    private final Set<TableNameInfo> ivmExcludedTriggerTables = new HashSet<>();
+    private final Set<TableNameInfo> excludedTriggerTables = new HashSet<>();
 
     private final Map<String, Integer> lowerCaseTableNamesCache = Maps.newHashMap();
     private final Map<String, Integer> lowerCaseDatabaseNamesCache = Maps.newHashMap();
@@ -414,14 +414,14 @@ public class StatementContext implements Closeable {
         return oneLevelTables;
     }
 
-    public Set<TableNameInfo> getIvmExcludedTriggerTables() {
-        return ivmExcludedTriggerTables;
+    public Set<TableNameInfo> getExcludedTriggerTables() {
+        return excludedTriggerTables;
     }
 
-    public void setIvmExcludedTriggerTables(Set<TableNameInfo> excludedTriggerTables) {
-        ivmExcludedTriggerTables.clear();
+    public void setExcludedTriggerTables(Set<TableNameInfo> excludedTriggerTables) {
+        this.excludedTriggerTables.clear();
         if (excludedTriggerTables != null) {
-            ivmExcludedTriggerTables.addAll(excludedTriggerTables);
+            this.excludedTriggerTables.addAll(excludedTriggerTables);
         }
     }
 
