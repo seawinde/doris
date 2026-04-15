@@ -464,19 +464,22 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
 
     /**
      * Builds the row-id expression and returns whether it is deterministic as a pair.
-     * - MOW: (buildRowIdHash(uk...), true)  — stable across refreshes
+     * - UNIQUE_KEYS (MOW or excluded): (buildRowIdHash(uk...), true)  — stable across refreshes
      * - DUP_KEYS: (UuidNumeric(), false)    — random per insert
-     * - Other key types: throws AnalysisException
+     * - Other key types: throws AnalysisException (unless excluded trigger table)
      */
     private Pair<Expression, Boolean> buildRowId(OlapTable table, LogicalOlapScan scan,
             boolean isExcludedTriggerTable) {
-        if (isExcludedTriggerTable) {
-            // Excluded trigger tables never drive incremental maintenance. Use a transient row-id so CREATE / full
-            // refresh can still build the internal UNIQUE_KEYS schema, and let runtime IVM precheck fall back.
-            return Pair.of(new UuidNumeric(), false);
-        }
         KeysType keysType = table.getKeysType();
-        if (keysType == KeysType.UNIQUE_KEYS && table.getEnableUniqueKeyMergeOnWrite()) {
+        if (keysType == KeysType.UNIQUE_KEYS) {
+            if (!table.getEnableUniqueKeyMergeOnWrite() && !isExcludedTriggerTable) {
+                throw new AnalysisException(
+                        "INCREMENTAL materialized view requires UNIQUE_KEYS base tables "
+                                + "to enable Merge-On-Write. Table '"
+                                + table.getName() + "' has MOW disabled."
+                                + " If this table does not participate in incremental refresh, "
+                                + "add it to 'excluded_trigger_tables'.");
+            }
             List<String> keyColNames = table.getBaseSchemaKeyColumns().stream()
                     .map(Column::getName)
                     .collect(Collectors.toList());
@@ -484,7 +487,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
                     .filter(s -> keyColNames.contains(s.getName()))
                     .collect(Collectors.toList());
             if (keySlots.isEmpty()) {
-                throw new AnalysisException("IVM: no unique key columns found for MOW table: "
+                throw new AnalysisException("IVM: no unique key columns found for UNIQUE_KEYS table: "
                         + table.getName());
             }
             return Pair.of(IvmUtil.buildRowIdHash(keySlots), true);
@@ -492,13 +495,8 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
         if (keysType == KeysType.DUP_KEYS) {
             return Pair.of(new UuidNumeric(), false);
         }
-        if (keysType == KeysType.UNIQUE_KEYS) {
-            throw new AnalysisException(
-                    "INCREMENTAL materialized view requires UNIQUE_KEYS base tables "
-                            + "to enable Merge-On-Write. Table '"
-                            + table.getName() + "' has MOW disabled."
-                            + " If this table does not participate in incremental refresh, "
-                            + "add it to 'excluded_trigger_tables'.");
+        if (isExcludedTriggerTable) {
+            return Pair.of(new UuidNumeric(), false);
         }
         throw new AnalysisException(
                 "INCREMENTAL materialized view requires base tables to be "
@@ -509,14 +507,14 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<Boolean> implements Cu
     }
 
     private boolean isExcludedTriggerTable(OlapTable table) {
-        if (statementContext == null || statementContext.getIvmExcludedTriggerTables().isEmpty()) {
+        if (statementContext == null || statementContext.getExcludedTriggerTables().isEmpty()) {
             return false;
         }
         TableNameInfo tableNameInfo = TableNameInfoUtils.fromTableOrNull(table);
         if (tableNameInfo == null) {
             return false;
         }
-        return MTMVPartitionUtil.isTableExcluded(statementContext.getIvmExcludedTriggerTables(), tableNameInfo);
+        return MTMVPartitionUtil.isTableExcluded(statementContext.getExcludedTriggerTables(), tableNameInfo);
     }
 
     /**
