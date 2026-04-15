@@ -520,7 +520,7 @@ public class MTMVPlanUtil {
         // method returns (IvmRefreshManager.doRefreshInternal reads exprIdStart). Creating a
         // separate StatementContext and restoring the original would lose ExprId allocations.
         try (StatementContext statementContext = ctx.getStatementContext()) {
-            statementContext.setIvmExcludedTriggerTables(excludedTriggerTables);
+            statementContext.setExcludedTriggerTables(excludedTriggerTables);
             NereidsPlanner planner = new NereidsPlanner(statementContext);
             // this is for expression column name infer when not use alias
             LogicalSink<Plan> logicalSink = new UnboundResultSink<>(logicalQuery);
