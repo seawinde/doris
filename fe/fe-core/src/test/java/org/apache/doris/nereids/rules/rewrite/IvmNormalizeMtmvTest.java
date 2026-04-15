@@ -39,6 +39,7 @@ import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.jobs.JobContext;
 import org.apache.doris.nereids.properties.PhysicalProperties;
 import org.apache.doris.nereids.trees.expressions.Alias;
+import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.trees.expressions.ExprId;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
@@ -274,7 +275,7 @@ class IvmNormalizeMtmvTest {
     }
 
     @Test
-    void testExcludedMowTableUsesTransientRowId() {
+    void testExcludedMowTableUsesDeterministicRowId() {
         OlapTable mowTable = newOlapTableWithBoundDb(13, "excluded_mow", KeysType.UNIQUE_KEYS, "test");
         TableProperty tableProperty = new TableProperty(new java.util.HashMap<>());
         tableProperty.setEnableUniqueKeyMergeOnWrite(true);
@@ -289,9 +290,10 @@ class IvmNormalizeMtmvTest {
         Assertions.assertInstanceOf(LogicalProject.class, result);
         LogicalProject<?> project = (LogicalProject<?>) result;
         Alias rowIdAlias = (Alias) project.getProjects().get(0);
-        Assertions.assertInstanceOf(UuidNumeric.class, rowIdAlias.child());
+        // Excluded MOW table should still compute deterministic row-id from unique key hash
+        Assertions.assertInstanceOf(Cast.class, rowIdAlias.child());
         IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
-        Assertions.assertFalse(normalizeResult.getRowIdDeterminism().values().iterator().next());
+        Assertions.assertTrue(normalizeResult.getRowIdDeterminism().values().iterator().next());
     }
 
     @Test
@@ -688,7 +690,7 @@ class IvmNormalizeMtmvTest {
         sessionVariable.setEnableIvmNormalRewrite(enableIvmNormalRewrite);
         connectContext.setSessionVariable(sessionVariable);
         StatementContext statementContext = new StatementContext(connectContext, null);
-        statementContext.setIvmExcludedTriggerTables(excludedTriggerTables);
+        statementContext.setExcludedTriggerTables(excludedTriggerTables);
         CascadesContext cascadesContext = CascadesContext.initContext(statementContext, root, PhysicalProperties.ANY);
         return new JobContext(cascadesContext, PhysicalProperties.ANY);
     }
