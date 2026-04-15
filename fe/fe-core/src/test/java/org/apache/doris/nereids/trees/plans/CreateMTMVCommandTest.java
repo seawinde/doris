@@ -25,8 +25,10 @@ import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.MTMV;
 import org.apache.doris.common.Config;
 import org.apache.doris.mtmv.MTMVRefreshEnum.RefreshMethod;
+import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.parser.NereidsParser;
+import org.apache.doris.nereids.trees.plans.commands.AlterMTMVCommand;
 import org.apache.doris.nereids.trees.plans.commands.CreateMTMVCommand;
 import org.apache.doris.nereids.trees.plans.commands.CreateTableCommand;
 import org.apache.doris.nereids.trees.plans.commands.info.CreateMTMVInfo;
@@ -36,6 +38,7 @@ import org.apache.doris.nereids.trees.plans.commands.info.LessThanPartition;
 import org.apache.doris.nereids.trees.plans.commands.info.PartitionDefinition;
 import org.apache.doris.nereids.trees.plans.commands.info.PartitionTableInfo;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
+import org.apache.doris.qe.OriginStatement;
 import org.apache.doris.utframe.TestWithFeService;
 
 import org.junit.jupiter.api.Assertions;
@@ -53,9 +56,14 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
     @Override
     public void createTable(String sql) throws Exception {
+        resetStatementContext(sql);
         LogicalPlan plan = new NereidsParser().parseSingle(sql);
         Assertions.assertTrue(plan instanceof CreateTableCommand);
         ((CreateTableCommand) plan).run(connectContext, null);
+    }
+
+    private void resetStatementContext(String sql) {
+        connectContext.setStatementContext(new StatementContext(connectContext, new OriginStatement(sql, 0)));
     }
 
     @Test
@@ -220,6 +228,7 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     }
 
     private CreateMTMVInfo getPartitionTableInfo(String sql) throws Exception {
+        resetStatementContext(sql);
         NereidsParser nereidsParser = new NereidsParser();
         LogicalPlan logicalPlan = nereidsParser.parseSingle(sql);
         Assertions.assertTrue(logicalPlan instanceof CreateMTMVCommand);
@@ -230,9 +239,17 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     }
 
     private void createMtmv(String sql) throws Exception {
+        resetStatementContext(sql);
         LogicalPlan logicalPlan = new NereidsParser().parseSingle(sql);
         Assertions.assertTrue(logicalPlan instanceof CreateMTMVCommand);
         ((CreateMTMVCommand) logicalPlan).run(connectContext, null);
+    }
+
+    private void alterMtmv(String sql) throws Exception {
+        resetStatementContext(sql);
+        LogicalPlan logicalPlan = new NereidsParser().parseSingle(sql);
+        Assertions.assertTrue(logicalPlan instanceof AlterMTMVCommand);
+        ((AlterMTMVCommand) logicalPlan).run(connectContext, null);
     }
 
     private MTMV getMtmv(String mvName) throws Exception {
@@ -906,11 +923,9 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         Assertions.assertTrue(mtmv.isIvm());
 
         // Removing the AGG table from excluded_trigger_tables should fail validation
-        AnalysisException ex = Assertions.assertThrows(AnalysisException.class, () -> {
-            LogicalPlan plan = new NereidsParser().parseSingle(
-                    "ALTER MATERIALIZED VIEW ivm_alter_excluded_mv SET ('excluded_trigger_tables' = '')");
-            ((org.apache.doris.nereids.trees.plans.commands.AlterMTMVCommand) plan).run(connectContext, null);
-        });
+        AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
+                () -> alterMtmv("ALTER MATERIALIZED VIEW ivm_alter_excluded_mv "
+                        + "SET ('excluded_trigger_tables' = '')"));
         Assertions.assertTrue(ex.getMessage().contains("requires base tables to be"),
                 "unexpected message: " + ex.getMessage());
     }
