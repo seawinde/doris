@@ -942,6 +942,73 @@ NOT(mv.row_id IS NULL AND delta_group_count <= 0)
 
 它防止“MV 中从未存在的 group 收到净删除 delta”时插入一条孤立 delete-sign 行。
 
+一个更接近代码的 apply plan 如下。注意这里的 `RIGHT OUTER JOIN` 是逻辑 join 类型：MV 当前状态是左孩子，delta 是右孩子；RIGHT OUTER 的语义是**保留右侧 delta 的每个 group**，如果 MV 里已有同 row-id 的 group，就把旧状态 join 过来，否则 MV 侧列为 NULL。
+
+```
+InsertIntoTableCommand(test_ivm_agg_mtmv_mv)
+└─ Project(final sink outputs)
+   ├─ __DORIS_IVM_ROW_ID_COL__ = delta.__DORIS_IVM_ROW_ID_COL__
+   ├─ k1                       = delta.k1
+   ├─ cnt                      = CAST(new_group_count AS BIGINT)
+   ├─ sum_v1                   = IF(new_sum_count > 0, new_sum_v1, NULL)
+   ├─ __DORIS_IVM_AGG_COUNT_COL__   = new_group_count
+   ├─ __DORIS_IVM_AGG_1_COUNT_COL__ = new_sum_count
+   └─ __DORIS_DELETE_SIGN__    = IF(new_group_count <= 0, 1, 0)
+      where:
+        new_group_count = assert_non_negative(
+            COALESCE(mv.__DORIS_IVM_AGG_COUNT_COL__, 0)
+            + delta.__DORIS_IVM_DELTA_GROUP_COUNT_COL__)
+        new_sum_count = assert_non_negative(
+            COALESCE(mv.__DORIS_IVM_AGG_1_COUNT_COL__, 0)
+            + delta.__DORIS_IVM_AGG_1_COUNT_COL__)
+        new_sum_v1 =
+            COALESCE(mv.sum_v1, 0) + delta.__DORIS_IVM_AGG_1_SUM_COL__
+   └─ Filter(NOT(mv.__DORIS_IVM_ROW_ID_COL__ IS NULL
+                 AND delta.__DORIS_IVM_DELTA_GROUP_COUNT_COL__ <= 0))
+      └─ RIGHT OUTER JOIN mv.__DORIS_IVM_ROW_ID_COL__ = delta.__DORIS_IVM_ROW_ID_COL__
+         ├─ left:  Filter(__DORIS_DELETE_SIGN__ = 0)
+         │        └─ OlapScan(test_ivm_agg_mtmv_mv)          -- MV old state
+         └─ right: Project(
+                   __DORIS_IVM_ROW_ID_COL__ = hash_null_safe(k1),
+                   k1,
+                   __DORIS_IVM_DELTA_GROUP_COUNT_COL__,
+                   __DORIS_IVM_AGG_1_SUM_COL__,
+                   __DORIS_IVM_AGG_1_COUNT_COL__)
+                  └─ Aggregate(group=[k1])
+                     ├─ __DORIS_IVM_DELTA_GROUP_COUNT_COL__ = SUM(dml_factor)
+                     ├─ __DORIS_IVM_AGG_1_SUM_COL__ = SUM(IF(dml_factor > 0, v1, -v1))
+                     └─ __DORIS_IVM_AGG_1_COUNT_COL__ = SUM(IF(v1 IS NULL, 0, dml_factor))
+                        └─ Project(k1, v1, dml_factor)
+                           └─ OlapScan(base, isDelta=true)
+```
+
+假设 MV 当前已有：
+
+| old MV group | row_id | old_count | old_sum |
+|--------------|--------|-----------|---------|
+| k1=1 | h1 | 1 | 10 |
+| k1=2 | h2 | 1 | 20 |
+
+本轮 delta aggregate 有 4 个 group：
+
+| delta group | row_id | delta_group_count | delta_sum | 含义 |
+|-------------|--------|-------------------|-----------|------|
+| k1=1 | h1 | +1 | +15 | 已存在 group 收到 insert/update 后的新贡献 |
+| k1=2 | h2 | -1 | -20 | 已存在 group 被删到 0 行 |
+| k1=3 | h3 | +1 | +30 | 新 group |
+| k1=9 | h9 | -1 | -90 | MV 中从未存在的 group 收到净删除 |
+
+`RIGHT OUTER JOIN` 后的逻辑行是：
+
+| delta group | mv side | 计算 | net-zero filter | 最终写回 |
+|-------------|---------|------|-----------------|----------|
+| k1=1 | 命中 h1 | `new_count=1+1=2`, `new_sum=10+15=25` | 通过，因为 `mv.row_id` 非 NULL | upsert `(k1=1,cnt=2,sum=25,delete_sign=0)` |
+| k1=2 | 命中 h2 | `new_count=1-1=0`, `new_sum=20-20=0` | 通过，因为 `mv.row_id` 非 NULL | 写 `delete_sign=1`，MOW 删除这个 group |
+| k1=3 | 未命中 | `new_count=0+1=1`, `new_sum=0+30=30` | 通过，因为 `delta_group_count > 0` | 插入新 group |
+| k1=9 | 未命中 | `new_count=0-1=-1`，本来会触发负计数/孤立删除问题 | 被过滤，因为 `mv.row_id IS NULL AND delta_group_count <= 0` | 不写回 |
+
+所以 net-zero filter 只挡一种情况：**右侧 delta 有行，但左侧 MV 没有对应旧状态，并且这批 delta 对该 group 的净行数不是正数**。这种行没有可维护的 MV 目标；如果放过去，要么产生负计数断言，要么写出一条无意义的 delete-sign 孤儿行。
+
 #### 8.4.3 当前 mock 下的数值为什么会膨胀
 
 首次 COMPLETE 后：
