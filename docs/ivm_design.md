@@ -108,7 +108,7 @@ graph TB
 | `IvmStreamRef` | 单张基表的 IVM stream 绑定：`consumedTso`（持久化）+ `latestTso`（transient，每次刷新前从 OlapTable 读取）；`isUpToDate()` 判断是否有 delta |
 | `IvmNormalizeMtmv` | **Nereids custom analyze 规则**，在 MV 定义 plan 上注入 row-id、agg 隐藏状态列；把结构写入 `IvmNormalizeResult` / `IvmAggMeta`；支持 OlapScan / Project / Filter / INNER & CROSS Join / UNION ALL / Aggregate 白名单 |
 | `IvmNormalizeResult` | 规则结果载体：规则化后的 plan、每个 row-id slot 是否确定性、（如有）聚合元信息 |
-| `IvmAggMeta` / `AggTarget` | 描述 MV 的聚合形态：是否 scalar、group key、`IVM_AGG_COUNT_COL`、每个可见聚合的 `AggType`（`COUNT_STAR/COUNT_EXPR/SUM/AVG/MIN/MAX`）及 hidden state slots |
+| `IvmAggMeta` / `AggTarget` | 描述 MV 的聚合形态：是否 scalar、group key、`IVM_AGG_COUNT_COL`、每个可见聚合的 `AggType`（代码枚举为 `COUNT/SUM/AVG/MIN/MAX`，`COUNT(*)` 与 `COUNT(expr)` 通过 `AggTarget.isCountStar()` 区分）及 hidden state slots |
 | `IvmUtil` | `buildRowIdHash`：null-safe 的 `CAST(murmur_hash3_64(ifnull(cast(k AS VARCHAR),''), cast(isnull(k) AS VARCHAR), ...) AS LARGEINT)`；scalar agg 用 `0::largeint`；隐藏列命名 / `ColumnDefinition` 工厂；`findRowIdSlot` 等 |
 | `IvmDeltaStrategy` | 策略接口：`List<Command> rewrite(Plan normalizedPlan)` |
 | `IvmDeltaRewriter` | 入口：先收集所有非 excluded 的 OlapScan，再为每个 `!isUpToDate()` 的 scan 生成一个 delta plan（自身 `withIsDelta(true)`，前序 scan 绑定 `latestTso`、后序 scan 绑定 `consumedTso`），最后按 `normalizeResult.isAggMv()` 分发到 `IvmAggDeltaStrategy` 或 `IvmSimpleScanDeltaStrategy` |
@@ -132,9 +132,11 @@ IVM 在 MV schema 上额外加入一批以 `__DORIS_IVM_` 开头的列（`IvmUti
 |----|------|---------|
 | `__DORIS_IVM_ROW_ID_COL__` | MV 的**行身份**，也是 UNIQUE_KEY（从而支持 MOW upsert） | 所有 IVM MV |
 | `__DORIS_IVM_AGG_COUNT_COL__` | 当前 group 的**总行数**（删除时用来判定是否 group 消失） | 聚合 MV |
-| `__DORIS_IVM_AGG_{n}_{STATE}_COL__` | 第 n 个 agg 的 hidden state：`COUNT/SUM/MIN/MAX` 等 | 聚合 MV |
+| `__DORIS_IVM_AGG_{n}_{STATE}_COL__` | 第 n 个 agg 需要额外持久化的 hidden state。当前实现中：`SUM/MIN/MAX` 只额外持久化 `COUNT`，可见列本身存储 sum/extreme；`AVG` 持久化 `SUM + COUNT`；`COUNT` 不额外持久化 per-target hidden state | 聚合 MV |
 | `__DORIS_IVM_DML_FACTOR_COL__` | delta 计算中间列：`+1`=插入，`-1`=删除 | 仅在 delta 子计划里出现，**不落盘** |
 | `__DORIS_IVM_DELTA_GROUP_COUNT_COL__` | delta 中每个 group 的行数变化量 | 仅在 delta 子计划里出现 |
+
+> 代码依据：`IvmNormalizeMtmv.buildHiddenStateForAgg`。旧版本设计里 MIN/MAX/SUM 可能被描述为各自持久化 hidden MIN/MAX/SUM；当前代码并不是这样，减少了物理 hidden 列数量，apply 阶段从 MV 可见列读取旧 sum/extreme。
 
 ### 4.2 row-id：MV 的行身份
 
@@ -309,8 +311,8 @@ flowchart TB
     P1 --> SC1["LogicalOlapScan t"]
   end
   subgraph After["改写后"]
-    SK2["LogicalResultSink<br/>outputs __IVM_ROW_ID__, k1, v1, v2"] --> P2["LogicalProject<br/>__IVM_ROW_ID__, k1, v1, v2"]
-    P2 --> P3["LogicalProject<br/>__IVM_ROW_ID__ = CAST(murmur_hash3_64(k1) AS LARGEINT),<br/>k1, v1, v2"]
+    SK2["LogicalResultSink<br/>outputs __DORIS_IVM_ROW_ID_COL__, k1, v1, v2"] --> P2["LogicalProject<br/>__DORIS_IVM_ROW_ID_COL__, k1, v1, v2"]
+    P2 --> P3["LogicalProject<br/>__DORIS_IVM_ROW_ID_COL__ = hash_null_safe(k1),<br/>k1, v1, v2"]
     P3 --> SC2["LogicalOlapScan t"]
   end
   Before --> After
@@ -344,12 +346,12 @@ flowchart TD
 
 | AggType | 原可见列 | 附带 hidden state 列 | 说明 |
 |---------|----------|----------------------|------|
-| `COUNT(*)` | `COUNT(*)` | 无（与 `__IVM_AGG_COUNT_COL__` 共用） | group 总行数就是 COUNT(*) |
-| `COUNT(expr)` | `COUNT(expr)` | `COUNT` | 排除 NULL 的计数 |
-| `SUM(expr)` | `SUM(expr)` | `SUM` + `COUNT` | 合并：`new_sum = old_sum + delta_sum` |
+| `COUNT(*)` | `COUNT(*)` | 无（可见列直接等于 `__DORIS_IVM_AGG_COUNT_COL__`） | group 总行数就是 COUNT(*) |
+| `COUNT(expr)` | `COUNT(expr)` | 无 | 可见列直接存储非 NULL 计数 |
+| `SUM(expr)` | `SUM(expr)` | `COUNT` | 可见列直接存储 SUM；hidden COUNT 用于 NULL 语义和非负校验 |
 | `AVG(expr)` | `AVG(expr)` | `SUM` + `COUNT` | 可见值 = `IF(count>0, sum/count, NULL)` |
-| `MIN(expr)` | `MIN(expr)` | `MIN` + `COUNT`（+ 运行时临时 `DELMIN`） | 删除可能击中当前 min → assert_true 守卫失败回退 |
-| `MAX(expr)` | `MAX(expr)` | `MAX` + `COUNT`（+ 运行时临时 `DELMAX`） | 同 MIN |
+| `MIN(expr)` | `MIN(expr)` | `COUNT`（+ 运行时临时 `DELMIN`） | 可见列直接存储 MIN；删除可能击中当前 min → assert_true 守卫失败回退 |
+| `MAX(expr)` | `MAX(expr)` | `COUNT`（+ 运行时临时 `DELMAX`） | 可见列直接存储 MAX；同 MIN |
 
 所有新增 agg 输出都通过 `newAgg.getOutput()` 按**名字**重新解析，避免 ExprId 漂移（`resolveAggTargetSlots`）。
 
@@ -516,409 +518,757 @@ sequenceDiagram
 
 ## 8. 详细示例
 
-### 示例 A：简单 MV，基表 **MOW**（`test_ivm_basic_mtmv`）
+本节按当前代码和回归测试写。可以在本地集群运行时用：
+
+```bash
+mysql -h 127.0.0.1 -P 9030 -u root
+```
+
+然后进入一个测试库执行下面 SQL。当前分支里 `CREATE MATERIALIZED VIEW ... REFRESH INCREMENTAL ...` 才会让 `CreateMTMVInfo.isEnableIvm()` 返回 true，并在 `MTMV.ivmInfo.enableIvm` 中持久化；示例里不额外写 `"enable_ivm"="true"`。另外，用户 DDL 可以写 `DISTRIBUTED BY RANDOM BUCKETS n`，但 IVM MV 在创建阶段会被 `CreateMTMVInfo.analyze()` 改成 `HASH(__DORIS_IVM_ROW_ID_COL__)`，`SHOW CREATE` 再把它显示回 `RANDOM` 以保证 DDL 可重放。
+
+### 8.1 简单 MV：MOW 基表（`test_ivm_basic_mtmv`）
 
 ```sql
--- 基表：UNIQUE KEY(k1) + MOW
-CREATE TABLE t_ivm_basic_base (k1 INT, v1 INT, v2 VARCHAR(50))
-UNIQUE KEY(k1) DISTRIBUTED BY HASH(k1) BUCKETS 2
-PROPERTIES("enable_unique_key_merge_on_write"="true", "replication_num"="1");
+DROP MATERIALIZED VIEW IF EXISTS mv_ivm_basic;
+DROP TABLE IF EXISTS t_ivm_basic_base;
 
--- IVM MV
+CREATE TABLE t_ivm_basic_base (
+    k1 INT,
+    v1 INT,
+    v2 VARCHAR(50)
+)
+UNIQUE KEY(k1)
+DISTRIBUTED BY HASH(k1) BUCKETS 2
+PROPERTIES (
+    "replication_num" = "1",
+    "enable_unique_key_merge_on_write" = "true"
+);
+
+INSERT INTO t_ivm_basic_base VALUES
+    (1, 10, 'aaa'),
+    (2, 20, 'bbb'),
+    (3, 30, 'ccc');
+
 CREATE MATERIALIZED VIEW mv_ivm_basic
 BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-DISTRIBUTED BY RANDOM BUCKETS 2 PROPERTIES('replication_num'='1')
+DISTRIBUTED BY RANDOM BUCKETS 2
+PROPERTIES ('replication_num' = '1')
 AS SELECT * FROM t_ivm_basic_base;
 ```
 
-#### A.1 CREATE MV 时 `IvmNormalizeMtmv` 的输出
+#### 8.1.1 CREATE 阶段的 schema 和 row-id
 
-原 plan：
-```
-ResultSink(k1, v1, v2)
-  └─ Project(k1, v1, v2)
-        └─ OlapScan(t_ivm_basic_base)
-```
-
-规则化后：
-```
-ResultSink(__IVM_ROW_ID__, k1, v1, v2)
-  └─ Project(__IVM_ROW_ID__, k1, v1, v2)
-        └─ Project(
-              __IVM_ROW_ID__ = CAST(murmur_hash3_64(CAST(k1 AS VARCHAR)) AS LARGEINT),
-              k1, v1, v2)
-              └─ OlapScan(t_ivm_basic_base)
-```
-
-`IvmNormalizeResult`：
-- `rowIdDeterminism = { Slot(__IVM_ROW_ID__) → true }`（MOW 稳定）
-- `aggMeta = null`
-
-**生成的 MV schema**：`(__IVM_ROW_ID__ LARGEINT [UNIQUE KEY, MOW], k1, v1, v2)`。
-
-#### A.2 首次 COMPLETE 刷新
-
-`REFRESH ... COMPLETE` 不走 IVM 路径（`MTMVTask.run` 里已过滤），直接分区刷新。
-
-插入后 MV 内容：
-
-| `__IVM_ROW_ID__` | k1 | v1 | v2  |
-|---|---|---|---|
-| hash(1) | 1 | 10 | aaa |
-| hash(2) | 2 | 20 | bbb |
-| hash(3) | 3 | 30 | ccc |
-
-#### A.3 INCREMENTAL 刷新（基表新增 (4,40,'ddd'),(5,50,'eee')）
-
-（当前 mock：delta = 整个基表全扫）
-
-`IvmSimpleScanDeltaStrategy` 构造的 plan（简化）：
-
-```
-InsertIntoTableCommand(sink = mv_ivm_basic, columns=[__IVM_ROW_ID__, k1, v1, v2, __DORIS_DELETE_SIGN__])
-  └─ Project(
-        __IVM_ROW_ID__, k1, v1, v2,
-        __DORIS_DELETE_SIGN__ = IF(dml_factor < 0, 1, 0)  -- 都是 0，因为 mock 全是 +1
-     )
-        └─ Project(__IVM_ROW_ID__, k1, v1, v2, dml_factor = 1)
-              └─ OlapScan(t_ivm_basic_base)
-```
-
-执行后，MV 收到 5 行 upsert。因为 row-id = `hash(k1)` 是**确定性**的，旧行（k1=1,2,3）自动被同 row-id 覆盖、新行（k1=4,5）被插入。最终 MV 有 5 行 —— **和 COMPLETE 刷新完全一致**。
-
-#### A.4 对比：如果基表是 **DUP_KEYS**（`test_ivm_dup_keys_mtmv`）
-
-row-id = `uuid_numeric()`，每次刷新生成新 id。第二次 INCREMENTAL 会读全基表 3+2=5 行（mock），但产生 5 个新 row-id，MOW 无法去重——**会导致重复**。所以：
-
-- DUP_KEYS 下 IVM 主要适用于 append-only 语义
-- 真实 binlog 方案下，DUP_KEYS 的 delta 只包含新增行，不会重复
-
----
-
-### 示例 B：聚合 MV，基表 **MOW**（`test_ivm_agg_mtmv`）
+`IvmNormalizeMtmv.visitLogicalOlapScan` 在 scan 上方加 row-id。因为基表是 `UNIQUE KEY(k1)` 且 MOW 开启，row-id 是确定性的：
 
 ```sql
-CREATE TABLE test_ivm_agg_mtmv_base (k1 INT, v1 INT)
-UNIQUE KEY(k1) ... MOW;
+CAST(
+  murmur_hash3_64(
+    ifnull(CAST(k1 AS VARCHAR), ''),
+    CAST(k1 IS NULL AS VARCHAR)
+  ) AS LARGEINT
+)
+```
+
+规则化 plan 的核心形态：
+
+```
+ResultSink(__DORIS_IVM_ROW_ID_COL__, k1, v1, v2)
+  └─ Project(__DORIS_IVM_ROW_ID_COL__, k1, v1, v2)
+       └─ Project(
+            __DORIS_IVM_ROW_ID_COL__ = hash_null_safe(k1),
+            k1, v1, v2)
+          └─ OlapScan(t_ivm_basic_base)
+```
+
+可观察的物理模型：
+
+```sql
+SET show_hidden_columns = true;
+DESC mv_ivm_basic ALL;
+SET show_hidden_columns = false;
+```
+
+应看到 `UNIQUE_KEYS`，主键是 `__DORIS_IVM_ROW_ID_COL__`，并带有 delete-sign 列。简化后等价于：
+
+| 列 | 来源 / 含义 |
+|----|-------------|
+| `__DORIS_IVM_ROW_ID_COL__` | IVM hidden row-id，MV 的唯一键 |
+| `k1, v1, v2` | 用户可见输出列 |
+| `__DORIS_DELETE_SIGN__` | MOW delete-sign，delta 写回时由 `dml_factor` 计算 |
+
+#### 8.1.2 COMPLETE 与 INCREMENTAL 的真实结果
+
+首次完整刷新不走 IVM delta：
+
+```sql
+REFRESH MATERIALIZED VIEW mv_ivm_basic COMPLETE;
+SELECT k1, v1, v2 FROM mv_ivm_basic ORDER BY k1;
+```
+
+回归测试期望结果：
+
+| k1 | v1 | v2 |
+|----|----|----|
+| 1 | 10 | aaa |
+| 2 | 20 | bbb |
+| 3 | 30 | ccc |
+
+插入两行后手动增量刷新：
+
+```sql
+INSERT INTO t_ivm_basic_base VALUES
+    (4, 40, 'ddd'),
+    (5, 50, 'eee');
+
+REFRESH MATERIALIZED VIEW mv_ivm_basic INCREMENTAL;
+SELECT k1, v1, v2 FROM mv_ivm_basic ORDER BY k1;
+```
+
+当前 mock delta 是“全量扫描基表”，因此 delta 子计划会读到 5 行：
+
+```
+InsertIntoTableCommand(mv_ivm_basic)
+  └─ Project(
+       __DORIS_IVM_ROW_ID_COL__, k1, v1, v2,
+       __DORIS_DELETE_SIGN__ = IF(__DORIS_IVM_DML_FACTOR_COL__ < 0, 1, 0))
+     └─ Project(
+          __DORIS_IVM_ROW_ID_COL__, k1, v1, v2,
+          __DORIS_IVM_DML_FACTOR_COL__ = 1)
+        └─ OlapScan(t_ivm_basic_base, isDelta=true)
+```
+
+旧的 `k1=1/2/3` 三行虽然被重新写入，但 row-id 仍是 `hash_null_safe(k1)`，所以 MOW 按同一个 row-id 覆盖；`k1=4/5` 是新 row-id。结果为：
+
+| k1 | v1 | v2 |
+|----|----|----|
+| 1 | 10 | aaa |
+| 2 | 20 | bbb |
+| 3 | 30 | ccc |
+| 4 | 40 | ddd |
+| 5 | 50 | eee |
+
+再用 MOW upsert 更新已有 key：
+
+```sql
+INSERT INTO t_ivm_basic_base VALUES
+    (2, 22, 'bbb_updated'),
+    (3, 33, 'ccc_updated');
+
+REFRESH MATERIALIZED VIEW mv_ivm_basic INCREMENTAL;
+SELECT k1, v1, v2 FROM mv_ivm_basic ORDER BY k1;
+```
+
+因为 `k1=2/3` 的 row-id 不变，MV 上对应两行被覆盖，测试期望为：
+
+| k1 | v1 | v2 |
+|----|----|----|
+| 1 | 10 | aaa |
+| 2 | 22 | bbb_updated |
+| 3 | 33 | ccc_updated |
+| 4 | 40 | ddd |
+| 5 | 50 | eee |
+
+### 8.2 简单 MV：`binlog_op` 删除模拟
+
+`IvmSimpleScanDeltaStrategy.buildDmlFactorExpr` 只认列名 `binlog_op`：表里存在这个列时，delta plan 使用 `IF(binlog_op = 0, 1, -1)`；不存在时使用常量 `1`。
+
+```sql
+DROP MATERIALIZED VIEW IF EXISTS mv_ivm_basic_op;
+DROP TABLE IF EXISTS t_ivm_basic_op_base;
+
+CREATE TABLE t_ivm_basic_op_base (
+    k1 INT,
+    v1 INT,
+    v2 VARCHAR(50),
+    binlog_op TINYINT
+)
+UNIQUE KEY(k1)
+DISTRIBUTED BY HASH(k1) BUCKETS 2
+PROPERTIES (
+    "replication_num" = "1",
+    "enable_unique_key_merge_on_write" = "true"
+);
+
+INSERT INTO t_ivm_basic_op_base VALUES
+    (1, 10, 'aaa', 0),
+    (2, 20, 'bbb', 0),
+    (3, 30, 'ccc', 1);
+
+CREATE MATERIALIZED VIEW mv_ivm_basic_op
+BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
+DISTRIBUTED BY RANDOM BUCKETS 2
+PROPERTIES ('replication_num' = '1')
+AS SELECT * FROM t_ivm_basic_op_base;
+```
+
+注意 `COMPLETE` 刷新不会解释 `binlog_op`，它只是全量重算 MV：
+
+```sql
+REFRESH MATERIALIZED VIEW mv_ivm_basic_op COMPLETE;
+SELECT k1, v1, v2, binlog_op FROM mv_ivm_basic_op ORDER BY k1;
+```
+
+| k1 | v1 | v2 | binlog_op |
+|----|----|----|-----------|
+| 1 | 10 | aaa | 0 |
+| 2 | 20 | bbb | 0 |
+| 3 | 30 | ccc | 1 |
+
+插入一行让 MV 变脏，再跑增量：
+
+```sql
+INSERT INTO t_ivm_basic_op_base VALUES (4, 40, 'ddd', 0);
+REFRESH MATERIALIZED VIEW mv_ivm_basic_op INCREMENTAL;
+SELECT k1, v1, v2, binlog_op FROM mv_ivm_basic_op ORDER BY k1;
+```
+
+当前 mock 会扫描 4 行，但 `k1=3` 的 `binlog_op=1` 使 `dml_factor=-1`，最终 sink project 写入 `__DORIS_DELETE_SIGN__=1`。MOW 把这行标记删除，因此查询结果是：
+
+| k1 | v1 | v2 | binlog_op |
+|----|----|----|-----------|
+| 1 | 10 | aaa | 0 |
+| 2 | 20 | bbb | 0 |
+| 4 | 40 | ddd | 0 |
+
+如果中间有 filter，`dml_factor` 也会被透传：
+
+```sql
+CREATE MATERIALIZED VIEW mv_ivm_basic_filter
+BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
+DISTRIBUTED BY RANDOM BUCKETS 2
+PROPERTIES ('replication_num' = '1')
+AS SELECT k1, v1 FROM t_ivm_basic_filter_base WHERE v1 > 15;
+```
+
+在 `test_ivm_basic_mtmv` 中，`k1=3, v1=30, binlog_op=1` 通过 `v1 > 15` 的 filter，但增量写回时 delete-sign=1；`k1=1, v1=10` 没通过 filter，根本不会进入 delta。增量后可见结果为 `(2,20),(4,40),(5,50)`。
+
+### 8.3 JOIN / UNION：多 bundle 和 row-id 组合
+
+JOIN 和 UNION 不只是“把每个 scan 加 row-id”。它们还决定了多表增量如何分批写回。
+
+#### 8.3.1 INNER JOIN
+
+回归测试 `test_ivm_inner_join_1` 的基本形态：
+
+```sql
+CREATE MATERIALIZED VIEW test_ivm_inner_join_1_basic_mv
+BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
+DISTRIBUTED BY RANDOM BUCKETS 2
+PROPERTIES ('replication_num' = '1')
+AS
+SELECT
+    t1.k1 AS k1,
+    t1.v1 AS left_v1,
+    t2.v2 AS right_v2
+FROM test_ivm_inner_join_1_basic_t1 t1
+INNER JOIN test_ivm_inner_join_1_basic_t2 t2
+    ON t1.k1 = t2.k1;
+```
+
+CREATE 阶段：
+
+```
+t1 row-id = hash_null_safe(t1.k1)
+t2 row-id = hash_null_safe(t2.k1)
+join row-id = hash_null_safe(t1_row_id, t2_row_id)
+```
+
+刷新阶段，`IvmDeltaRewriter.generateDeltaPlans` 对每个未消费的 base scan 生成一个 bundle。某个 bundle 里只有一个 scan 被 `withIsDelta(true)`，JOIN 的另一侧保留为 snapshot scan 并绑定 TSO：
+
+```
+bundle for Δt1:
+  t1.isDelta = true       -> 注入 dml_factor
+  t2.withTso(snapshot)    -> 不注入 dml_factor
+
+bundle for Δt2:
+  t1.withTso(snapshot)
+  t2.isDelta = true
+```
+
+`IvmSimpleScanDeltaStrategy.visitLogicalJoin` 要求左右最多一侧带 `dml_factor`。如果 snapshot 侧 row-id 非确定，且 delta 中出现删除，会在 `dml_factor` 上包 `assert_true(dml_factor >= 0, ...)`，运行期触发后回退。
+
+测试里的可见结果：
+
+| 阶段 | SQL 操作 | MV 结果 |
+|------|----------|---------|
+| COMPLETE | t1=(1,10),(2,20)，t2=(1,100),(3,300) | `(1,10,100)` |
+| INCREMENTAL 1 | 插入 `t1=(3,30)` | `(1,10,100),(3,30,300)` |
+| INCREMENTAL 2 | upsert `t2=(1,111),(2,220)` | `(1,10,111),(2,20,220),(3,30,300)` |
+
+#### 8.3.2 UNION ALL
+
+UNION ALL 的 row-id 会把 arm 序号放进 hash，防止 self-union 冲突：
+
+```
+arm0 row-id = hash_null_safe(0, child_row_id)
+arm1 row-id = hash_null_safe(1, child_row_id)
+union output row-id = arm-level row-id
+```
+
+delta rewrite 和 JOIN 的区别是：UNION ALL 中非 delta arm 会被裁掉，因为 `Δ(a UNION ALL b) = Δa UNION ALL Δb`，不需要 snapshot 侧参与组合。
+
+基本两表 UNION：
+
+```sql
+SELECT k1, v1 FROM test_ivm_union_1_basic_t1
+UNION ALL
+SELECT k1, v1 FROM test_ivm_union_1_basic_t2;
+```
+
+测试结果：
+
+| 阶段 | MV 结果 |
+|------|---------|
+| COMPLETE | `(1,10),(2,20),(3,30),(4,40)` |
+| t1 插入 `(5,50)` 后 INCREMENTAL | `(1,10),(2,20),(3,30),(4,40),(5,50)` |
+| t2 插入 `(6,60)` 后 INCREMENTAL | `(1,10),(2,20),(3,30),(4,40),(5,50),(6,60)` |
+
+self-union 会保留两份逻辑行，因为 arm 序号不同：
+
+```sql
+SELECT k1, v1 FROM test_ivm_union_1_self_t
+UNION ALL
+SELECT k1, v1 FROM test_ivm_union_1_self_t;
+```
+
+`(1,10),(2,20)` 首次刷新后 MV 是 `(1,10),(1,10),(2,20),(2,20)`；插入 `(3,30)` 后增量结果是 `(1,10),(1,10),(2,20),(2,20),(3,30),(3,30)`。
+
+### 8.4 聚合 MV：COUNT/SUM（`test_ivm_agg_1`）
+
+```sql
+DROP MATERIALIZED VIEW IF EXISTS test_ivm_agg_mtmv_mv;
+DROP TABLE IF EXISTS test_ivm_agg_mtmv_base;
+
+CREATE TABLE test_ivm_agg_mtmv_base (
+    k1 INT,
+    v1 INT
+)
+UNIQUE KEY(k1)
+DISTRIBUTED BY HASH(k1) BUCKETS 2
+PROPERTIES (
+    "replication_num" = "1",
+    "enable_unique_key_merge_on_write" = "true"
+);
+
+INSERT INTO test_ivm_agg_mtmv_base VALUES
+    (1, 10),
+    (2, 20),
+    (3, 30);
 
 CREATE MATERIALIZED VIEW test_ivm_agg_mtmv_mv
 BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-DISTRIBUTED BY RANDOM BUCKETS 2 PROPERTIES('replication_num'='1')
+DISTRIBUTED BY RANDOM BUCKETS 2
+PROPERTIES ('replication_num' = '1')
 AS SELECT k1, COUNT(*) AS cnt, SUM(v1) AS sum_v1
-   FROM test_ivm_agg_mtmv_base GROUP BY k1;
+   FROM test_ivm_agg_mtmv_base
+   GROUP BY k1;
 ```
 
-#### B.1 规则化后的 plan
+#### 8.4.1 当前代码实际生成的 hidden state
 
-```
-ResultSink(__IVM_ROW_ID__, k1, cnt, sum_v1, __IVM_AGG_COUNT_COL__,
-           __IVM_AGG_1_SUM_COL__, __IVM_AGG_1_COUNT_COL__)
-  └─ Project(
-        __IVM_ROW_ID__ = CAST(murmur_hash3_64(CAST(k1 AS VARCHAR)) AS LARGEINT),
-        k1, cnt, sum_v1,
-        __IVM_AGG_COUNT_COL__,
-        __IVM_AGG_1_SUM_COL__,
-        __IVM_AGG_1_COUNT_COL__)
-        └─ Aggregate(group=[k1],
-              outputs=[
-                k1,
-                cnt     = COUNT(*),           -- visible ordinal 0 (COUNT_STAR)
-                sum_v1  = SUM(v1),            -- visible ordinal 1 (SUM)
-                __IVM_AGG_COUNT_COL__       = COUNT(*),   -- 共享 group 行数
-                __IVM_AGG_1_SUM_COL__       = SUM(v1),
-                __IVM_AGG_1_COUNT_COL__     = COUNT(v1)
-              ])
-              └─ Project(...)  ← bottom project after NormalizeAggregate
-                    └─ Project(__IVM_ROW_ID_BASE__, k1, v1)   ← base scan row-id 在此层注入，但 agg 层不用
-                          └─ OlapScan(test_ivm_agg_mtmv_base)
-```
+这部分很容易和旧设计混淆。对上面的两个聚合目标：
 
-`IvmAggMeta`：
-- `scalarAgg = false`
-- `groupKeySlots = [k1]`
-- `groupCountSlot = __IVM_AGG_COUNT_COL__`
-- `aggTargets = [`
-  - `AggTarget(ord=0, COUNT_STAR, visible=cnt, hidden={COUNT: __IVM_AGG_COUNT_COL__})`（*复用 groupCount*）
-  - `AggTarget(ord=1, SUM, visible=sum_v1, hidden={SUM: __IVM_AGG_1_SUM_COL__, COUNT: __IVM_AGG_1_COUNT_COL__}, exprSlots=[v1])`
-  - `]`
+| ordinal | 可见聚合 | `AggTarget` | 额外持久化 hidden state |
+|---------|----------|-------------|--------------------------|
+| 0 | `COUNT(*) AS cnt` | `AggType.COUNT`, `isCountStar=true` | 无。`cnt` 由 `__DORIS_IVM_AGG_COUNT_COL__` 推导 |
+| 1 | `SUM(v1) AS sum_v1` | `AggType.SUM` | 只有 `__DORIS_IVM_AGG_1_COUNT_COL__`。`sum_v1` 可见列本身保存 SUM 状态 |
 
-MV schema（UNIQUE KEY = `__IVM_ROW_ID__`，MOW）：
+因此 schema 不是“visible + hidden sum + hidden count”，而是：
 
-| 列 | 含义 |
+| 列 | 说明 |
 |----|------|
-| `__IVM_ROW_ID__` (LARGEINT) | `hash(k1)` |
+| `__DORIS_IVM_ROW_ID_COL__` | `hash_null_safe(k1)` |
 | `k1` | group key |
 | `cnt` | 可见 COUNT(*) |
-| `sum_v1` | 可见 SUM(v1) |
-| `__IVM_AGG_COUNT_COL__` | group 总行数（= cnt） |
-| `__IVM_AGG_1_SUM_COL__` | SUM 的 hidden sum |
-| `__IVM_AGG_1_COUNT_COL__` | SUM 的 hidden non-null count |
+| `sum_v1` | 可见 SUM(v1)，同时作为旧 SUM 状态读取 |
+| `__DORIS_IVM_AGG_COUNT_COL__` | group 总行数 |
+| `__DORIS_IVM_AGG_1_COUNT_COL__` | `SUM(v1)` 对应的非 NULL 计数 |
 
-#### B.2 首次 COMPLETE 刷新后 MV
-
-基表：`(1,10),(2,20),(3,30)`。
-
-| row_id | k1 | cnt | sum_v1 | agg_count | agg_1_sum | agg_1_count |
-|---|---|---|---|---|---|---|
-| h(1) | 1 | 1 | 10 | 1 | 10 | 1 |
-| h(2) | 2 | 1 | 20 | 1 | 20 | 1 |
-| h(3) | 3 | 1 | 30 | 1 | 30 | 1 |
-
-#### B.3 INCREMENTAL 刷新
-
-`IvmAggDeltaStrategy` 构造的 delta plan（简化，省略 dml_factor 透传）：
+规则化 plan 核心：
 
 ```
--- delta sub plan
-DeltaAgg = Aggregate(group=[k1],
-   outputs=[
-      k1,
-      delta_group_count      = SUM(dml_factor),
-      delta_1_sum            = SUM(IF(dml_factor>0, v1, -v1)),      -- signedExpr
-      delta_1_count          = SUM(IF(v1 IS NULL, 0, dml_factor))   -- NULL-aware
-   ])
-   └─ Project(v1, dml_factor=1, ...)
-       └─ OlapScan(base)
-
-TopDeltaProject = Project(
-   __IVM_ROW_ID__ = CAST(murmur_hash3_64(CAST(k1 AS VARCHAR)) AS LARGEINT),
-   k1,
-   COALESCE(delta_group_count, 0),
-   COALESCE(delta_1_sum, 0),
-   delta_1_count
-)
+Project(
+  __DORIS_IVM_ROW_ID_COL__ = hash_null_safe(k1),
+  k1, cnt, sum_v1,
+  __DORIS_IVM_AGG_COUNT_COL__,
+  __DORIS_IVM_AGG_1_COUNT_COL__)
+└─ Aggregate(group=[k1],
+     outputs=[
+       k1,
+       cnt = COUNT(*),
+       sum_v1 = SUM(v1),
+       __DORIS_IVM_AGG_COUNT_COL__ = COUNT(*),
+       __DORIS_IVM_AGG_1_COUNT_COL__ = COUNT(v1)
+     ])
 ```
 
-Apply plan：
+#### 8.4.2 增量 apply 公式
+
+delta aggregate 会临时算出 `__DORIS_IVM_AGG_1_SUM_COL__`，但它只是 delta plan 中的语义 slot，不会作为 MV 物理列持久化：
 
 ```
-Project(final sink outputs):
-  __IVM_ROW_ID__    = delta.row_id
-  k1                = delta.k1
-  cnt               = CAST(new_group_count AS type(cnt))
-  sum_v1            = IF(new_agg_1_count > 0, new_agg_1_sum, NULL)
-  __IVM_AGG_COUNT_COL__   = new_group_count
-  __IVM_AGG_1_SUM_COL__   = new_agg_1_sum
-  __IVM_AGG_1_COUNT_COL__ = new_agg_1_count
-  __DORIS_DELETE_SIGN__   = IF(new_group_count <= 0, 1, 0)
-
-where:
-  new_group_count = AssertTrue(COALESCE(mv.agg_count,0) + delta_group_count >= 0)
-                    && COALESCE(mv.agg_count,0) + delta_group_count
-  new_agg_1_sum   = COALESCE(mv.agg_1_sum,0) + delta_1_sum
-  new_agg_1_count = AssertTrue(...)&& COALESCE(mv.agg_1_count,0) + delta_1_count
-
-  └─ Filter(NOT(mv.row_id IS NULL AND delta_group_count <= 0))   -- net-zero
-        └─ RIGHT OUTER JOIN ON mv.__IVM_ROW_ID__ = delta.__IVM_ROW_ID__
-              ├─ Filter(delete_sign=0) ← OlapScan(mv)  -- probe (大)
-              └─ TopDeltaProject                        -- build (小)
-
--- 整体被包成 InsertIntoTableCommand(mv, columns=[...,__DORIS_DELETE_SIGN__])
+DeltaAgg(group=[k1]):
+  __DORIS_IVM_DELTA_GROUP_COUNT_COL__ = SUM(dml_factor)
+  delta_sum_v1 = SUM(IF(dml_factor > 0, v1, -v1))
+  delta_count_v1 = SUM(IF(v1 IS NULL, 0, dml_factor))
 ```
 
-##### 假设基表变为 `(1,10),(2,20),(3,30),(4,40)`（加一行）
+apply 阶段：
 
-mock 下 delta = 全量基表。对 k1=1/2/3，delta 里 `delta_group_count=1, delta_1_sum=v1, delta_1_count=1`。JOIN 后每组：
+```
+new_group_count = assert_true(COALESCE(mv.__DORIS_IVM_AGG_COUNT_COL__, 0)
+                              + delta_group_count >= 0)
+                  ? COALESCE(mv.__DORIS_IVM_AGG_COUNT_COL__, 0) + delta_group_count
+                  : NULL
 
-- `new_group_count = 1 + 1 = 2`（**数值不对**！真正 binlog 方案下 delta 只含 k1=4 行）
-- `new_sum = old + v1 = 2*v1`
+new_sum_count = assert_true(COALESCE(mv.__DORIS_IVM_AGG_1_COUNT_COL__, 0)
+                            + delta_count_v1 >= 0)
+                ? COALESCE(mv.__DORIS_IVM_AGG_1_COUNT_COL__, 0) + delta_count_v1
+                : NULL
 
-这就是 `test_ivm_agg_mtmv.groovy` 中明确标注"目前只验证任务不报错，不校验数值正确性"的原因。binlog 就绪后 delta 变成真正的 diff：只含 k1=4 行，`delta_group_count=1, delta_1_sum=40, delta_1_count=1`，JOIN 到 MV 找不到 row_id = hash(4) → MV 侧 NULL → `new_group_count = COALESCE(NULL,0)+1 = 1`，结果正确。
+new_sum_v1 = COALESCE(mv.sum_v1, 0) + delta_sum_v1
 
-##### 假设删除 k1=2（dml_factor=-1）
+sink:
+  cnt       = CAST(new_group_count AS type(cnt))
+  sum_v1    = IF(new_sum_count > 0, CAST(new_sum_v1 AS type(sum_v1)), NULL)
+  delete    = IF(new_group_count <= 0, 1, 0)
+```
 
-delta：`(k1=2, delta_group_count=-1, delta_1_sum=-20, delta_1_count=-1)`。
+`RIGHT OUTER JOIN` 仍是通用形态：左侧扫 MV 当前状态并过滤 delete-sign=0，右侧是 delta aggregate。grouped aggregate 还会套 net-zero filter：
 
-- `new_group_count = 1 + (-1) = 0`
-- `__DORIS_DELETE_SIGN__ = IF(0 <= 0, 1, 0) = 1` → MOW 删除该 row
+```
+NOT(mv.row_id IS NULL AND delta_group_count <= 0)
+```
 
-其他 group 不出现在 delta → JOIN 后 delta 侧 NULL → 被 net-zero filter 过滤掉（`mv.row_id IS NULL AND delta_group_count <= 0` 本身不会触发，但没有 delta 行的 group 根本不会进 RIGHT JOIN 的输出）。
+它防止“MV 中从未存在的 group 收到净删除 delta”时插入一条孤立 delete-sign 行。
 
-##### MIN/MAX 守卫实际例子
+#### 8.4.3 当前 mock 下的数值为什么会膨胀
 
-若 MV 是 `MIN(v1)`，old_min=10（row k1=1），删除 k1=1 →
-- `delta_del_min = MIN over delete-only = 10`
-- 守卫：`AssertTrue(delta_del_min IS NULL OR old_min IS NULL OR delta_del_min > old_min)` → `10 > 10` false → BE 抛错 → `IvmRefreshManager` 捕获 → `INCREMENTAL_EXECUTION_FAILED` → `MTMVTask` 回退到 COMPLETE（若 AUTO）。
+首次 COMPLETE 后：
 
----
+| k1 | cnt | sum_v1 |
+|----|-----|--------|
+| 1 | 1 | 10 |
+| 2 | 1 | 20 |
+| 3 | 1 | 30 |
 
-### 示例 B2：聚合 MV with MIN/MAX（MOW 基表）
+然后：
 
 ```sql
-CREATE TABLE t_minmax_base (k1 INT, v1 INT)
-UNIQUE KEY(k1) ... MOW;
+INSERT INTO test_ivm_agg_mtmv_base VALUES
+    (4, 40),
+    (1, 15);
 
-CREATE MATERIALIZED VIEW mv_minmax
+REFRESH MATERIALIZED VIEW test_ivm_agg_mtmv_mv INCREMENTAL;
+SELECT k1, cnt, sum_v1 FROM test_ivm_agg_mtmv_mv ORDER BY k1;
+```
+
+MOW 基表此时是 `(1,15),(2,20),(3,30),(4,40)`。因为 mock delta 全扫：
+
+| k1 | old `(cnt,sum)` | delta `(count,sum)` | new `(cnt,sum)` |
+|----|-----------------|---------------------|-----------------|
+| 1 | `(1,10)` | `(1,15)` | `(2,25)` |
+| 2 | `(1,20)` | `(1,20)` | `(2,40)` |
+| 3 | `(1,30)` | `(1,30)` | `(2,60)` |
+| 4 | `(0,0)` | `(1,40)` | `(1,40)` |
+
+测试期望正是：
+
+| k1 | cnt | sum_v1 |
+|----|-----|--------|
+| 1 | 2 | 25 |
+| 2 | 2 | 40 |
+| 3 | 2 | 60 |
+| 4 | 1 | 40 |
+
+再 upsert `k1=2`：
+
+```sql
+INSERT INTO test_ivm_agg_mtmv_base VALUES (2, 25);
+REFRESH MATERIALIZED VIEW test_ivm_agg_mtmv_mv INCREMENTAL;
+```
+
+全表 delta 变为 `(1,15),(2,25),(3,30),(4,40)`，所以输出继续膨胀为：
+
+| k1 | cnt | sum_v1 |
+|----|-----|--------|
+| 1 | 3 | 40 |
+| 2 | 3 | 65 |
+| 3 | 3 | 90 |
+| 4 | 2 | 80 |
+
+这不是最终 binlog 语义的正确结果，而是当前 mock delta 的真实行为。随后 COMPLETE 会回到全量真值：
+
+| k1 | cnt | sum_v1 |
+|----|-----|--------|
+| 1 | 1 | 15 |
+| 2 | 1 | 25 |
+| 3 | 1 | 30 |
+| 4 | 1 | 40 |
+
+### 8.5 Scalar aggregate：row-id 固定为 0
+
+scalar aggregate 没有 group key，`IvmUtil.buildRowIdHash(empty)` 返回 `0::largeint`。所以整张 MV 只有一个 IVM row-id，聚合 apply 的 delete-sign 恒为 0，不走 grouped net-zero filter。
+
+测试 SQL：
+
+```sql
+CREATE MATERIALIZED VIEW test_ivm_agg_mtmv_scalar_mv
 BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-DISTRIBUTED BY RANDOM BUCKETS 2 PROPERTIES('replication_num'='1')
+DISTRIBUTED BY RANDOM BUCKETS 2
+PROPERTIES ('replication_num' = '1')
+AS SELECT COUNT(*) AS total_cnt,
+          SUM(v1) AS total_sum,
+          AVG(v1) AS avg_v1,
+          COUNT(v1) AS cnt_v1
+   FROM test_ivm_agg_mtmv_scalar_base;
+```
+
+当前 hidden state：
+
+| 可见列 | 额外持久化 hidden state |
+|--------|--------------------------|
+| `total_cnt = COUNT(*)` | 无，使用 group count |
+| `total_sum = SUM(v1)` | `__DORIS_IVM_AGG_1_COUNT_COL__` |
+| `avg_v1 = AVG(v1)` | `__DORIS_IVM_AGG_2_SUM_COL__`, `__DORIS_IVM_AGG_2_COUNT_COL__` |
+| `cnt_v1 = COUNT(v1)` | 无，可见列保存 count |
+
+回归测试的可见结果：
+
+| 阶段 | total_cnt | total_sum | avg_v1 | cnt_v1 |
+|------|-----------|-----------|--------|--------|
+| COMPLETE，base=(10,20,30) | 3 | 60 | 20 | 3 |
+| upsert `k1=1 -> 15` 后 INCREMENTAL | 6 | 125 | 20.83333333333333 | 6 |
+| 再插入 `k1=4 -> 40` 后 INCREMENTAL | 10 | 230 | 23 | 10 |
+| COMPLETE 回到真值 | 4 | 105 | 26.25 | 4 |
+
+膨胀原因同 §8.4：当前 delta 全扫。真实 binlog delta 接入后，scalar apply 公式本身不需要变化。
+
+### 8.6 MIN/MAX：边界删除、count-drop-to-zero 与 mock 差异
+
+```sql
+CREATE MATERIALIZED VIEW test_ivm_agg_mtmv_minmax_mv
+BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
+DISTRIBUTED BY HASH(k1) BUCKETS 2
+PROPERTIES ('replication_num' = '1')
 AS SELECT k1, MIN(v1) AS min_v1, MAX(v1) AS max_v1
-   FROM t_minmax_base GROUP BY k1;
+   FROM test_ivm_agg_mtmv_minmax_base
+   GROUP BY k1;
 ```
 
-#### B2.1 规则化后 MV schema
+#### 8.6.1 物理状态不是 hidden MIN/MAX
 
-`IvmAggMeta.aggTargets`：
-- `AggTarget(ord=0, MIN, visible=min_v1, hidden={MIN: __IVM_AGG_0_MIN_COL__, COUNT: __IVM_AGG_0_COUNT_COL__}, exprSlots=[v1])`
-- `AggTarget(ord=1, MAX, visible=max_v1, hidden={MAX: __IVM_AGG_1_MAX_COL__, COUNT: __IVM_AGG_1_COUNT_COL__}, exprSlots=[v1])`
+当前代码中，`MIN/MAX` 的可见列本身保存旧极值，只额外持久化非 NULL count：
 
-MV schema：
-
-| 列 | 含义 |
+| 列 | 说明 |
 |----|------|
-| `__IVM_ROW_ID__` LARGEINT | `hash(k1)` |
-| `k1` | group key |
-| `min_v1` / `max_v1` | 可见值 |
-| `__IVM_AGG_COUNT_COL__` | group 行数 |
-| `__IVM_AGG_0_MIN_COL__` / `__IVM_AGG_0_COUNT_COL__` | MIN 的 hidden state |
-| `__IVM_AGG_1_MAX_COL__` / `__IVM_AGG_1_COUNT_COL__` | MAX 的 hidden state |
+| `min_v1` | 可见 MIN，同时作为 old MIN 状态读取 |
+| `max_v1` | 可见 MAX，同时作为 old MAX 状态读取 |
+| `__DORIS_IVM_AGG_COUNT_COL__` | group 总行数 |
+| `__DORIS_IVM_AGG_0_COUNT_COL__` | MIN(v1) 的非 NULL 计数 |
+| `__DORIS_IVM_AGG_1_COUNT_COL__` | MAX(v1) 的非 NULL 计数 |
 
-> 注意：MIN/MAX 的 hidden MIN/MAX 列**允许 NULL**，因为 "空集合" 和 "NULL 值集合" 都会自然产生 NULL——这对守卫和 `LEAST/GREATEST` 的 NULL-安全分支逻辑很关键（`needsCoalesceInTopProject` 显式返回 false）。
-
-#### B2.2 delta 子计划
-
-对 MIN/MAX，`IvmAggDeltaStrategy` 在 delta aggregate 里除了 hidden count 以外，还产出**两个**极值列：insert-only 极值（落地为 MV 的 hidden 状态）+ delete-only 极值（**transient**，只在 delta plan 里存在，列名形如 `__ivm_transient_0_DELMIN__`，**不写回 MV**，仅作为 assert_true 守卫的输入）。
+delta aggregate 临时产生 insert-only 和 delete-only 极值：
 
 ```
-DeltaAgg = Aggregate(group=[k1],
-   outputs=[
-      k1,
-      delta_group_count       = SUM(dml_factor),
+MIN target (ordinal=0):
+  delta_insert_min = MIN(IF(dml_factor > 0, v1, NULL))
+  delta_delete_min = MIN(IF(dml_factor < 0, v1, NULL))
+                   AS __DORIS_IVM_TRANSIENT_0_DELMIN_COL__
+  delta_min_count  = SUM(IF(v1 IS NULL, 0, dml_factor))
 
-      -- MIN 目标 (ord=0)
-      delta_0_min             = MIN(IF(dml_factor > 0, v1, NULL)),   -- insertOnlyExpr
-      delta_transient_0_DELMIN = MIN(IF(dml_factor < 0, v1, NULL)),  -- deleteOnlyExpr
-      delta_0_count           = SUM(IF(v1 IS NULL, 0, dml_factor)),  -- NULL-aware count
-
-      -- MAX 目标 (ord=1)
-      delta_1_max             = MAX(IF(dml_factor > 0, v1, NULL)),
-      delta_transient_1_DELMAX = MAX(IF(dml_factor < 0, v1, NULL)),
-      delta_1_count           = SUM(IF(v1 IS NULL, 0, dml_factor))
-   ])
-   └─ Project(v1, dml_factor, ...)
-        └─ OlapScan(t_minmax_base)
-
-TopDeltaProject = Project(
-   __IVM_ROW_ID__   = CAST(murmur_hash3_64(CAST(k1 AS VARCHAR)) AS LARGEINT),
-   k1,
-   delta_group_count,       -- grouped 情况下不需要 COALESCE
-   delta_0_min,             -- **不** COALESCE (NULL 有语义含义)
-   delta_transient_0_DELMIN,-- **不** COALESCE
-   delta_0_count,
-   delta_1_max,
-   delta_transient_1_DELMAX,
-   delta_1_count
-)
+MAX target (ordinal=1):
+  delta_insert_max = MAX(IF(dml_factor > 0, v1, NULL))
+  delta_delete_max = MAX(IF(dml_factor < 0, v1, NULL))
+                   AS __DORIS_IVM_TRANSIENT_1_DELMAX_COL__
+  delta_max_count  = SUM(IF(v1 IS NULL, 0, dml_factor))
 ```
 
-#### B2.3 apply plan（按列逐项展开）
+这些 transient DELMIN/DELMAX 列只用于守卫，不写回 MV。
+
+#### 8.6.2 守卫公式
+
+`IvmAggDeltaStrategy.buildExtremalTargetExpressions` 先算新非 NULL count：
 
 ```
-Project(final sink outputs):
-  __IVM_ROW_ID__     = delta.__IVM_ROW_ID__
-  k1                 = delta.k1
-  __IVM_AGG_COUNT_COL__
-                     = AssertTrue(new_group_count >= 0) && new_group_count
-                       where new_group_count = COALESCE(mv.agg_count, 0) + delta_group_count
-
-  -- MIN 目标
-  __IVM_AGG_0_COUNT_COL__
-                     = AssertTrue(new_c0 >= 0) && new_c0
-                       where new_c0 = COALESCE(mv.agg_0_count, 0) + delta_0_count
-  __IVM_AGG_0_MIN_COL__  = new_min_0   (见下)
-  min_v1             = IF(new_c0 > 0, CAST(new_min_0 AS type(min_v1)), NULL)
-
-  -- MAX 目标
-  __IVM_AGG_1_COUNT_COL__  (对称)
-  __IVM_AGG_1_MAX_COL__    = new_max_1
-  max_v1                   = IF(new_c1 > 0, CAST(new_max_1 AS type(max_v1)), NULL)
-
-  __DORIS_DELETE_SIGN__
-                     = IF(new_group_count <= 0, 1, 0)
+new_count = assert_true(COALESCE(old_count, 0) + delta_count >= 0)
+            ? COALESCE(old_count, 0) + delta_count
+            : NULL
 ```
 
-**new_min_0 的计算（`buildTargetExpressions` 中 `MIN` 分支）**：
+MIN 的守卫：
 
 ```
--- 1. assert_true 守卫 (放在 If 的 cond 位置，条件必须为 true 否则 BE 抛错)
-del_min_guard_cond =
-     delta_transient_0_DELMIN IS NULL                                   -- 本轮没有删除
-  OR mv.__IVM_AGG_0_MIN_COL__ IS NULL                                   -- MV 侧该组原本无值
-  OR delta_transient_0_DELMIN > mv.__IVM_AGG_0_MIN_COL__                -- 被删行都严格大于当前 min
-
-del_min_guard = AssertTrue(del_min_guard_cond,
-                           "IVM: deleted row may be current MIN value, fallback to COMPLETE")
-
--- 2. 新 min 的 NULL 安全分支计算
-new_min_raw =
-  IF(mv.agg_0_min IS NULL,        delta_0_min,
-    IF(delta_0_min IS NULL,       mv.agg_0_min,
-                                   LEAST(mv.agg_0_min, delta_0_min)))
-
--- 3. 把守卫嵌进 If 的 condition 位置，无论走哪支返回值都一样 (仅为触发 assert_true 的副作用)
-new_min_0 = IF(del_min_guard, new_min_raw, new_min_raw)
+assert_true(
+     new_count = 0
+  OR delta_delete_min IS NULL
+  OR old_min IS NULL
+  OR delta_delete_min > old_min,
+  'IVM: deleted row may be current MIN value, fallback to COMPLETE')
 ```
 
-**new_max_1 对称**：`new_max_raw = GREATEST(...)`；守卫条件改为 `delta_transient_1_DELMAX < mv.agg_1_max`。
-
-整体 apply plan 形态（聚合通用）：
+MAX 对称：
 
 ```
-Project(final sink outputs)
-  └─ Filter(net-zero)
-       └─ RIGHT OUTER JOIN ON mv.row_id = delta.row_id
-            ├─ Filter(delete_sign=0) ← OlapScan(mv_minmax)   -- probe
-            └─ TopDeltaProject (delta)                       -- build
+assert_true(
+     new_count = 0
+  OR delta_delete_max IS NULL
+  OR old_max IS NULL
+  OR delta_delete_max < old_max,
+  'IVM: deleted row may be current MAX value, fallback to COMPLETE')
 ```
 
-#### B2.4 守卫触发与回退的具体场景
+`new_count = 0` 是当前代码的重要分支：如果所有非 NULL 值都被删光，结果必然是 NULL，可以绕过边界比较。
 
-> 基础数据：base = `(1,10),(1,30),(1,20),(2,5)`（MOW 会去重，只保留每个 k1 的最新行——但为了演示我们假设各 key 有多行，或把这个例子改成 DUP_KEYS。为简化用 DUP_KEYS 语义看）。
-> 首轮 COMPLETE 后 MV：
-> - k1=1: count=3, min=10, max=30
-> - k1=2: count=1, min=5,  max=5
+极值合并：
 
-**场景 1：删除一行 `(1, 20)` ——不击中极值**
+```
+new_min =
+  CASE
+    WHEN new_count = 0 THEN NULL
+    WHEN old_min IS NULL THEN delta_insert_min
+    WHEN delta_insert_min IS NULL THEN old_min
+    ELSE LEAST(old_min, delta_insert_min)
+  END
 
-delta（k1=1）：
-- `delta_group_count = -1`
-- `delta_0_min       = NULL` (没有 insert)
-- `delta_transient_0_DELMIN = 20`
-- `delta_0_count     = -1`
-- `delta_1_max / delta_transient_1_DELMAX` 对称：`NULL / 20`
+new_max 同理使用 GREATEST
+```
 
-守卫：`20 > mv.min(=10)` ✓；`20 < mv.max(=30)` ✓ → 通过。
+#### 8.6.3 mock 下的 MIN/MAX 可见结果
 
-结果：`new_count = 3-1 = 2, new_min_raw = LEAST(10, NULL) 分支 = 10, new_max_raw = GREATEST(30, NULL) 分支 = 30`。MV 更新为 `(k1=1, count=2, min=10, max=30)`——正确。
+`test_ivm_agg_1` 中，初始数据经过 MOW 后是 `(1,10),(2,20),(3,30)`。COMPLETE 后：
 
-**场景 2：删除一行 `(1, 10)` ——击中当前 min**
+| k1 | min_v1 | max_v1 |
+|----|--------|--------|
+| 1 | 10 | 10 |
+| 2 | 20 | 20 |
+| 3 | 30 | 30 |
 
-delta（k1=1）：
-- `delta_transient_0_DELMIN = 10`
+然后：
 
-守卫：`10 > mv.min(=10)` ✗ → `AssertTrue` 失败 → BE 抛错 → `IvmRefreshManager.doRefreshInternal` 捕获 `Exception` → 返回 `IvmRefreshResult.fallback(INCREMENTAL_EXECUTION_FAILED, ...)` → `MTMVTask`：
-- 若 `RefreshMode.AUTO` → 继续走分区刷新兜底
-- 若 `RefreshMode.INCREMENTAL` → 抛 `JobException`
+```sql
+INSERT INTO test_ivm_agg_mtmv_minmax_base VALUES (1, 5);
+INSERT INTO test_ivm_agg_mtmv_minmax_base VALUES (4, 40);
+REFRESH MATERIALIZED VIEW test_ivm_agg_mtmv_minmax_mv INCREMENTAL;
+```
 
-**场景 3：删除 k1=2 整组唯一的一行 `(2, 5)`**
+当前 mock delta 只把全表当前行当 insert，没表达 `k1=1, v1=10` 的旧值 delete。因此 k1=1 的 old max=10 会保留：
 
-delta（k1=2）：
-- `delta_group_count = -1`
-- `delta_transient_0_DELMIN = 5`
+| k1 | min_v1 | max_v1 |
+|----|--------|--------|
+| 1 | 5 | 10 |
+| 2 | 20 | 20 |
+| 3 | 30 | 30 |
+| 4 | 40 | 40 |
 
-守卫：`5 > mv.min(=5)` ✗ → 同样触发守卫失败。
+COMPLETE 重算后才得到真值：
 
-> 这个场景在直觉上 "group 都删光了，min/max 本来就应该不存在"，但守卫无法区分 "组内全删" 和 "部分删并击中极值"——因为 delta 只有极值聚合，没有"是否清空"的信息。所以保守地走回退，换取正确性。
+| k1 | min_v1 | max_v1 |
+|----|--------|--------|
+| 1 | 5 | 5 |
+| 2 | 20 | 20 |
+| 3 | 30 | 30 |
+| 4 | 40 | 40 |
 
----
+这说明 MIN/MAX 不是“简单地用当前全表再算一遍 delta”就能正确；必须有真实 delete delta 或回退。
 
-### 示例 C：聚合 MV，基表 **DUP_KEYS**
+#### 8.6.4 边界删除失败与 AUTO 回退
 
-与示例 B 逻辑完全一致，区别仅在**基表 row-id 层**：
+`test_ivm_agg_1` 的 scalar MIN/MAX + `binlog_op` 场景：
 
-- base scan 的 row-id = `uuid_numeric()`（非确定性）
-- 但 **agg MV 的 row-id = hash(group_keys)**，依然是**确定性**的
+```sql
+CREATE MATERIALIZED VIEW test_ivm_agg_mtmv_minmax_op_mv
+BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
+DISTRIBUTED BY RANDOM BUCKETS 2
+PROPERTIES ('replication_num' = '1')
+AS SELECT MIN(v1) AS min_v1, MAX(v1) AS max_v1, COUNT(*) AS cnt
+   FROM test_ivm_agg_mtmv_minmax_op_base;
+```
 
-所以 **聚合 IVM 对 DUP_KEYS 基表天然友好**：只要 group key 稳定，增量计算依然正确。`test_ivm_dup_keys_mtmv` 正是利用这一点验证聚合场景。
+初始 `(1,10,0),(2,20,0),(3,30,0)` COMPLETE 后是：
+
+| min_v1 | max_v1 | cnt |
+|--------|--------|-----|
+| 10 | 30 | 3 |
+
+把当前 min 对应行标记为删除：
+
+```sql
+INSERT INTO test_ivm_agg_mtmv_minmax_op_base VALUES (1, 10, 1);
+INSERT INTO test_ivm_agg_mtmv_minmax_op_base VALUES (5, 35, 0);
+REFRESH MATERIALIZED VIEW test_ivm_agg_mtmv_minmax_op_mv INCREMENTAL;
+```
+
+delta 中 `delta_delete_min=10`，old min 也是 10，且新 count 不为 0，所以 MIN 守卫失败。执行链路是：
+
+```
+AssertTrue 抛错
+  -> IvmRefreshManager.doRefreshInternal 捕获
+  -> detail 包含 "IVM: deleted row may be current"
+  -> IvmRefreshResult.fallback(MIN_MAX_BOUNDARY_HIT, detail)
+```
+
+如果用户显式写 `REFRESH ... INCREMENTAL`，`MTMVTask` 不会自动 full refresh，而是抛 `JobException`，任务状态为 FAILED。若触发模式是 `AUTO`，`MTMVTask` 会继续走分区/完整刷新兜底。
+
+#### 8.6.5 删除到 zero count 不回退
+
+`test_ivm_agg_6` 覆盖了当前代码的 `new_count = 0` 分支。初始：
+
+```sql
+INSERT INTO test_ivm_agg_mtmv_minmax_zero_base VALUES
+    (1, 10, 0),
+    (2, 20, 0);
+
+CREATE MATERIALIZED VIEW test_ivm_agg_mtmv_minmax_zero_mv
+BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
+DISTRIBUTED BY RANDOM BUCKETS 2
+PROPERTIES ('replication_num' = '1')
+AS SELECT MIN(v1) AS min_v1, MAX(v1) AS max_v1, COUNT(*) AS cnt, SUM(v1) AS sum_v1
+   FROM test_ivm_agg_mtmv_minmax_zero_base;
+```
+
+COMPLETE 后：
+
+| min_v1 | max_v1 | cnt | sum_v1 |
+|--------|--------|-----|--------|
+| 10 | 20 | 2 | 30 |
+
+把两行都改成 `binlog_op=1` 后增量：
+
+```sql
+INSERT INTO test_ivm_agg_mtmv_minmax_zero_base VALUES (1, 10, 1);
+INSERT INTO test_ivm_agg_mtmv_minmax_zero_base VALUES (2, 20, 1);
+REFRESH MATERIALIZED VIEW test_ivm_agg_mtmv_minmax_zero_mv INCREMENTAL;
+```
+
+`new_count=0`，MIN/MAX 守卫绕过，scalar MV 的单行保留但值变成 NULL：
+
+| min_v1 | max_v1 | cnt | sum_v1 |
+|--------|--------|-----|--------|
+| NULL | NULL | 0 | NULL |
+
+另一个测试场景是“只删除最后一个非 NULL 值，但还有 NULL 行保留”。MIN/MAX/SUM 的非 NULL count 归零，因此它们变 NULL；`COUNT(*)` 因为 NULL 行仍然存在，在当前 mock 下还会被全表 delta 膨胀。
+
+### 8.7 DUP_KEYS 基表的边界
+
+简单 scan MV 使用 base scan row-id 作为 MV row-id。DUP_KEYS 基表没有稳定主键，`IvmNormalizeMtmv.buildRowId` 会使用 `uuid_numeric()`：
+
+```
+OlapScan(DUP_KEYS table)
+  -> __DORIS_IVM_ROW_ID_COL__ = uuid_numeric()
+  -> deterministic = false
+```
+
+所以 `test_ivm_dup_keys_mtmv` 只验证 COMPLETE：
+
+| 阶段 | MV 结果 |
+|------|---------|
+| 第一次 COMPLETE | `(1,10,'aaa'),(2,20,'bbb'),(3,30,'ccc')` |
+| 插入 `(4,40,'ddd'),(1,11,'aaa_dup')` 后第二次 COMPLETE | 5 行，包含两个 `k1=1` |
+
+如果对这种 simple MV 直接跑当前 mock INCREMENTAL，全表每行都会生成新 `uuid_numeric()`，MOW 无法用 row-id 去重，会累积重复。真实 binlog 接入后，append-only DUP_KEYS 的新增行可以作为 delta 写入；但 delete/update 仍没有稳定 row-id 可用于撤回。
+
+聚合 MV 不直接使用 base row-id 作为 MV row-id，而是使用 `hash_null_safe(group_keys)`。这让“按 group 合并状态”本身可以确定地命中同一 MV 行；不过在当前 mock delta 下，DUP_KEYS 和 MOW 一样会因为全表重扫导致聚合值膨胀。要验证数值正确性，需要真实 `[consumedTso, latestTso]` delta scan。
 
 ---
 
