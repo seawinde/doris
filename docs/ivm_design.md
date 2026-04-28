@@ -357,6 +357,31 @@ flowchart TB
 - `j < i` → `scan.withTso(latestTso)`（已包含 i 的更早 delta，看到的是新视图 v2）
 - `j > i` → `scan.withTso(consumedTso)`（i 的 delta 还未被它们感知，看到的是旧视图 v1）
 
+**例：两表 JOIN 同时有 delta**：
+
+```sql
+SELECT a.k, a.v1, b.v2
+FROM a INNER JOIN b ON a.k = b.k;
+```
+
+假设 normalized plan 中非 excluded 的 scan 访问顺序是 `[a, b]`，stream 状态为：
+
+| 表 | `consumedTso` | `latestTso` | 是否有 delta |
+|----|---------------|-------------|--------------|
+| `a` | 10 | 20 | 是 |
+| `b` | 5 | 8 | 是 |
+
+`generateDeltaPlans` 会生成两个 bundle：
+
+| bundle | `a` scan | `b` scan | 状态推进 |
+|--------|----------|----------|----------|
+| Δa | `a.withIsDelta(true)`，真实 binlog 语义为读 `(10, 20]` | `b.withTso(5)` | `[a@10, b@5]` → `[a@20, b@5]` |
+| Δb | `a.withTso(20)` | `b.withIsDelta(true)`，真实 binlog 语义为读 `(5, 8]` | `[a@20, b@5]` → `[a@20, b@8]` |
+
+这样整轮刷新等价于把 JOIN 输入从旧快照向量 `[a@10, b@5]` 逐步推进到新快照向量 `[a@20, b@8]`。第一个 bundle 计算 `a` 的变化对旧 `b` 快照的影响；第二个 bundle 在 `a` 已经推进到新快照后，再计算 `b` 的变化影响，因此 `Δa ⋈ Δb` 这类交叉项只会在第二个 bundle 中通过 `a.withTso(20)` 被覆盖一次。若 `b.consumedTso == b.latestTso`，则只生成 Δa 这一个 bundle。
+
+当前代码中的 `replaceWithDelta` 仍只是 `scan.withIsDelta(true)`，真正的 `(consumedTso, latestTso]` binlog 范围 scan 还在 TODO 中（见 §9）。
+
 **不变量**：每条 plan 必须恰好包含 1 个 `isDelta=true` 的 scan，否则 `Preconditions.checkState(deltaCount == 1, ...)` 失败（`:151–152`）。
 
 最后按 `normalizeResult.isAggMv()` 分发到 `IvmSimpleScanDeltaStrategy`（§5.3）或 `IvmAggDeltaStrategy`（§5.4）。
