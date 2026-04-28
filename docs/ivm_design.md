@@ -934,6 +934,83 @@ sink:
   delete    = IF(new_group_count <= 0, 1, 0)
 ```
 
+下面用一组带 `NULL` 的数据代入公式，说明几个 hidden state 到底怎么被使用。这个例子只展示聚合状态合并，不沿用上面 `UNIQUE KEY(k1)` 的简化 DDL；真实场景里可以是 `UNIQUE KEY(id)` 的 MOW 基表，MV 按 `k1` 聚合：
+
+```sql
+CREATE TABLE t (
+    id INT,
+    k1 INT,
+    v1 INT,
+    binlog_op TINYINT
+)
+UNIQUE KEY(id)
+DISTRIBUTED BY HASH(id) BUCKETS 1
+PROPERTIES (
+    "replication_num" = "1",
+    "enable_unique_key_merge_on_write" = "true"
+);
+
+CREATE MATERIALIZED VIEW mv_sum
+BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
+DISTRIBUTED BY RANDOM BUCKETS 1
+PROPERTIES ('replication_num' = '1')
+AS SELECT k1, COUNT(*) AS cnt, SUM(v1) AS s
+   FROM t
+   GROUP BY k1;
+```
+
+首次 COMPLETE 时，假设基表快照为：
+
+| id | k1 | v1 |
+|----|----|----|
+| 1 | 1 | 10 |
+| 2 | 1 | NULL |
+| 3 | 1 | 5 |
+| 4 | 2 | NULL |
+
+MV 物理状态会保存：
+
+| `row_id` | `k1` | `cnt` | `s` | `__DORIS_IVM_AGG_COUNT_COL__` | `__DORIS_IVM_AGG_1_COUNT_COL__` |
+|----------|------|-------|-----|--------------------------------|----------------------------------|
+| `hash(k1=1)` | 1 | 3 | 15 | 3 | 2 |
+| `hash(k1=2)` | 2 | 1 | NULL | 1 | 0 |
+
+含义分别是：
+
+- `__DORIS_IVM_ROW_ID_COL__ = hash(k1)`：把一个 MV 物理行绑定到一个 group。
+- `__DORIS_IVM_AGG_COUNT_COL__ = COUNT(*)`：这个 group 当前还有多少行；降到 0 时，整组写 `delete_sign=1`。
+- `s`：可见 `SUM(v1)`，同时作为 apply 阶段读取的旧 SUM 状态。
+- `__DORIS_IVM_AGG_1_COUNT_COL__ = COUNT(v1)`：`SUM(v1)` 对应的非 NULL 输入个数；它决定 `SUM` 最终是数值还是 `NULL`。
+
+假设本轮真实 binlog/stream 提供如下 delta 行：
+
+| op | k1 | v1 | `dml_factor` |
+|----|----|----|--------------|
+| insert | 1 | 7 | +1 |
+| delete | 1 | 10 | -1 |
+| delete | 2 | NULL | -1 |
+| insert | 3 | 4 | +1 |
+
+delta aggregate 结果为：
+
+| `k1` | `delta_group_count` | `delta_sum_v1` | `delta_count_v1` |
+|------|---------------------|----------------|------------------|
+| 1 | 0 | -3 | 0 |
+| 2 | -1 | 0 | 0 |
+| 3 | +1 | 4 | +1 |
+
+其中 `k1=2` 的 `delta_sum_v1` 在聚合内部是全 NULL，TopDeltaProject 会 `COALESCE` 成 0；`delta_count_v1` 仍是 0，因为 `COUNT(v1)` 忽略 NULL。
+
+套用 apply 公式：
+
+| `k1` | 旧状态 | delta | 新状态 | 写回 |
+|------|--------|-------|--------|------|
+| 1 | `cnt=3`, `s=15`, `sum_count=2` | `group=0`, `sum=-3`, `count=0` | `cnt=3`, `s=12`, `sum_count=2` | `delete_sign=0`，upsert group |
+| 2 | `cnt=1`, `s=NULL`, `sum_count=0` | `group=-1`, `sum=0`, `count=0` | `cnt=0`, `s=NULL`, `sum_count=0` | `delete_sign=1`，删除 group |
+| 3 | 无旧状态 | `group=+1`, `sum=4`, `count=+1` | `cnt=1`, `s=4`, `sum_count=1` | `delete_sign=0`，插入新 group |
+
+这个例子里 `__DORIS_IVM_AGG_1_COUNT_COL__` 的作用很关键：如果一个 group 还有行但所有 `v1` 都是 `NULL`，`SUM(v1)` 必须是 `NULL`；如果只用 `COALESCE(old_sum, 0) + delta_sum`，会错误地产生 0。hidden count 让 apply 阶段可以写成 `IF(new_sum_count > 0, new_sum, NULL)`，保持 SQL 聚合语义。
+
 `RIGHT OUTER JOIN` 仍是通用形态：左侧扫 MV 当前状态并过滤 delete-sign=0，右侧是 delta aggregate。grouped aggregate 还会套 net-zero filter：
 
 ```
