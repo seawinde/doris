@@ -40,7 +40,6 @@ import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.jobs.JobContext;
 import org.apache.doris.nereids.properties.PhysicalProperties;
 import org.apache.doris.nereids.trees.expressions.Alias;
-import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.trees.expressions.ExprId;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
@@ -51,6 +50,7 @@ import org.apache.doris.nereids.trees.expressions.functions.agg.Count;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Max;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Min;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Sum;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.MurmurHash3128;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.UuidNumeric;
 import org.apache.doris.nereids.trees.expressions.literal.BooleanLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.LargeIntLiteral;
@@ -283,7 +283,7 @@ class IvmNormalizeMtmvTest {
         LogicalProject<?> project = (LogicalProject<?>) result;
         Assertions.assertInstanceOf(Alias.class, project.getProjects().get(0));
         Alias rowIdAlias = (Alias) project.getProjects().get(0);
-        Assertions.assertInstanceOf(Cast.class, rowIdAlias.child());
+        Assertions.assertInstanceOf(MurmurHash3128.class, rowIdAlias.child());
         Assertions.assertEquals(
                 IvmUtil.buildRowIdHash(ImmutableList.of(aggScan.getOutput().get(0))).toSql(),
                 rowIdAlias.child().toSql());
@@ -326,7 +326,7 @@ class IvmNormalizeMtmvTest {
         LogicalProject<?> project = (LogicalProject<?>) result;
         Alias rowIdAlias = (Alias) project.getProjects().get(0);
         // Excluded MOW table should still compute deterministic row-id from unique key hash
-        Assertions.assertInstanceOf(Cast.class, rowIdAlias.child());
+        Assertions.assertInstanceOf(MurmurHash3128.class, rowIdAlias.child());
         IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
         Assertions.assertTrue(normalizeResult.getRowIdDeterminism().values().iterator().next());
     }
@@ -456,10 +456,9 @@ class IvmNormalizeMtmvTest {
         Assertions.assertEquals(IvmUtil.ivmAggHiddenColumnName(0, "COUNT"), outputNames.get(4));
         Assertions.assertEquals(5, outputNames.size());
 
-        // row-id expression is hash(id) via Cast(MurmurHash364)
+        // row-id expression is a 128-bit hash on group keys.
         Alias rowIdAlias = (Alias) topProject.getProjects().get(0);
-        Assertions.assertInstanceOf(
-                org.apache.doris.nereids.trees.expressions.Cast.class, rowIdAlias.child());
+        Assertions.assertInstanceOf(MurmurHash3128.class, rowIdAlias.child());
 
         // IvmNormalizeResult has aggMeta
         IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
