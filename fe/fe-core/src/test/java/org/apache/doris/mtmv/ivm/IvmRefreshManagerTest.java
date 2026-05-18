@@ -17,9 +17,15 @@
 
 package org.apache.doris.mtmv.ivm;
 
+import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.MTMV;
+import org.apache.doris.catalog.OlapTable;
+import org.apache.doris.catalog.info.TableNameInfo;
 import org.apache.doris.common.AnalysisException;
+import org.apache.doris.datasource.CatalogIf;
+import org.apache.doris.info.TableNameInfoUtils;
 import org.apache.doris.mtmv.BaseTableInfo;
+import org.apache.doris.mtmv.MTMVPartitionUtil;
 import org.apache.doris.mtmv.MTMVRelation;
 import org.apache.doris.nereids.trees.plans.commands.Command;
 import org.apache.doris.qe.ConnectContext;
@@ -420,6 +426,87 @@ public class IvmRefreshManagerTest {
         Assertions.assertEquals(20L, streamRef.getLatestTso());
     }
 
+    @Test
+    public void testExcludedTriggerTableVersionCheckRequiresBaseline() {
+        BaseTableInfo baseTableInfo = new BaseTableInfo(new TableNameInfo("internal", "db1", "t1"));
+        IvmInfo ivmInfo = new IvmInfo();
+        MTMV mtmv = mockMtmvWithExcluded(baseTableInfo, ivmInfo);
+        TestExcludedTriggerTableVersionChecker checker =
+                new TestExcludedTriggerTableVersionChecker(baseTableInfo, 10L);
+
+        IvmExcludedTriggerTableVersionResult result = checker.check(mtmv, relationFor(baseTableInfo));
+
+        Assertions.assertTrue(result.isDirty());
+        Assertions.assertTrue(result.getReason().contains("COMPLETE refresh"));
+    }
+
+    @Test
+    public void testExcludedTriggerTableVersionCheckDetectsVersionChange() {
+        BaseTableInfo baseTableInfo = new BaseTableInfo(new TableNameInfo("internal", "db1", "t1"));
+        IvmInfo ivmInfo = new IvmInfo();
+        ivmInfo.getExcludedTriggerTableVersions().put(baseTableInfo, 10L);
+        ivmInfo.setExcludedTriggerTablesSignature("internal.db1.t1");
+        MTMV mtmv = mockMtmvWithExcluded(baseTableInfo, ivmInfo);
+        TestExcludedTriggerTableVersionChecker checker =
+                new TestExcludedTriggerTableVersionChecker(baseTableInfo, 11L);
+
+        IvmExcludedTriggerTableVersionResult result = checker.check(mtmv, relationFor(baseTableInfo));
+
+        Assertions.assertTrue(result.isDirty());
+        Assertions.assertTrue(result.getReason().contains("version changed"));
+    }
+
+    @Test
+    public void testExcludedTriggerTableVersionCheckDetectsConfigChange() {
+        BaseTableInfo baseTableInfo = new BaseTableInfo(new TableNameInfo("internal", "db1", "t1"));
+        BaseTableInfo oldBaseTableInfo = new BaseTableInfo(new TableNameInfo("internal", "db1", "old_t1"));
+        IvmInfo ivmInfo = new IvmInfo();
+        ivmInfo.getExcludedTriggerTableVersions().put(oldBaseTableInfo, 10L);
+        ivmInfo.setExcludedTriggerTablesSignature("internal.db1.old_t1");
+        MTMV mtmv = mockMtmvWithExcluded(baseTableInfo, ivmInfo);
+        TestExcludedTriggerTableVersionChecker checker =
+                new TestExcludedTriggerTableVersionChecker(baseTableInfo, 10L);
+
+        IvmExcludedTriggerTableVersionResult result = checker.check(mtmv, relationFor(baseTableInfo));
+
+        Assertions.assertTrue(result.isDirty());
+        Assertions.assertTrue(result.getReason().contains("changed"));
+    }
+
+    @Test
+    public void testExcludedTriggerTableVersionCheckPassesWhenBaselineMatches() {
+        BaseTableInfo baseTableInfo = new BaseTableInfo(new TableNameInfo("internal", "db1", "t1"));
+        IvmInfo ivmInfo = new IvmInfo();
+        ivmInfo.getExcludedTriggerTableVersions().put(baseTableInfo, 10L);
+        ivmInfo.setExcludedTriggerTablesSignature("internal.db1.t1");
+        MTMV mtmv = mockMtmvWithExcluded(baseTableInfo, ivmInfo);
+        TestExcludedTriggerTableVersionChecker checker =
+                new TestExcludedTriggerTableVersionChecker(baseTableInfo, 10L);
+
+        IvmExcludedTriggerTableVersionResult result = checker.check(mtmv, relationFor(baseTableInfo));
+
+        Assertions.assertFalse(result.isDirty());
+        Assertions.assertEquals(10L, result.getCurrentVersions().get(baseTableInfo));
+    }
+
+    @Test
+    public void testExcludedTriggerTableVersionCheckDetectsRemovingConfig() {
+        BaseTableInfo baseTableInfo = new BaseTableInfo(new TableNameInfo("internal", "db1", "t1"));
+        IvmInfo ivmInfo = new IvmInfo();
+        ivmInfo.getExcludedTriggerTableVersions().put(baseTableInfo, 10L);
+        ivmInfo.setExcludedTriggerTablesSignature("internal.db1.t1");
+        MTMV mtmv = mockMtmv();
+        Mockito.when(mtmv.getIvmInfo()).thenReturn(ivmInfo);
+        Mockito.when(mtmv.getExcludedTriggerTables()).thenReturn(Collections.emptySet());
+        TestExcludedTriggerTableVersionChecker checker =
+                new TestExcludedTriggerTableVersionChecker(baseTableInfo, 10L);
+
+        IvmExcludedTriggerTableVersionResult result = checker.check(mtmv, relationFor(baseTableInfo));
+
+        Assertions.assertTrue(result.isDirty());
+        Assertions.assertTrue(result.getReason().contains("excluded_trigger_tables changed"));
+    }
+
     private static IvmRefreshContext newContext(MTMV mtmv) {
         return new IvmRefreshContext(mtmv, new ConnectContext());
     }
@@ -433,6 +520,31 @@ public class IvmRefreshManagerTest {
 
     private static List<Command> makeCommands(Command deltaWriteCommand, MTMV mtmv) {
         return Collections.singletonList(deltaWriteCommand);
+    }
+
+    private static MTMVRelation relationFor(BaseTableInfo baseTableInfo) {
+        Set<BaseTableInfo> baseTables = Sets.newHashSet(baseTableInfo);
+        return new MTMVRelation(baseTables, baseTables, baseTables, null, null);
+    }
+
+    private static MTMV mockMtmvWithExcluded(BaseTableInfo baseTableInfo, IvmInfo ivmInfo) {
+        MTMV mtmv = mockMtmv();
+        Mockito.when(mtmv.getIvmInfo()).thenReturn(ivmInfo);
+        Mockito.when(mtmv.getExcludedTriggerTables()).thenReturn(Sets.newHashSet(
+                new TableNameInfo(baseTableInfo.getCtlName(), baseTableInfo.getDbName(), baseTableInfo.getTableName())));
+        return mtmv;
+    }
+
+    private static OlapTable mockOlapTable(BaseTableInfo baseTableInfo) {
+        OlapTable table = Mockito.mock(OlapTable.class);
+        DatabaseIf database = Mockito.mock(DatabaseIf.class);
+        CatalogIf catalog = Mockito.mock(CatalogIf.class);
+        Mockito.when(table.getName()).thenReturn(baseTableInfo.getTableName());
+        Mockito.when(table.getDatabase()).thenReturn(database);
+        Mockito.when(database.getFullName()).thenReturn(baseTableInfo.getDbName());
+        Mockito.when(database.getCatalog()).thenReturn(catalog);
+        Mockito.when(catalog.getName()).thenReturn(baseTableInfo.getCtlName());
+        return table;
     }
 
     private static class TestDeltaExecutor extends IvmDeltaExecutor {
@@ -500,6 +612,27 @@ public class IvmRefreshManagerTest {
         void persistIvmInfo(MTMV mtmv, IvmInfo ivmInfo) {
             // Snapshot the flag value at each call (not the mutable object ref)
             persistCalls.add(ivmInfo.isRunningIvmRefresh());
+        }
+    }
+
+    private static class TestExcludedTriggerTableVersionChecker extends IvmExcludedTriggerTableVersionChecker {
+        private final BaseTableInfo baseTableInfo;
+        private final long visibleVersion;
+
+        private TestExcludedTriggerTableVersionChecker(BaseTableInfo baseTableInfo, long visibleVersion) {
+            this.baseTableInfo = baseTableInfo;
+            this.visibleVersion = visibleVersion;
+        }
+
+        @Override
+        public Map<BaseTableInfo, Long> captureExcludedTriggerTableVersions(MTMV mtmv, MTMVRelation relation) {
+            Map<BaseTableInfo, Long> versions = new HashMap<>();
+            OlapTable table = mockOlapTable(baseTableInfo);
+            TableNameInfo tableNameInfo = TableNameInfoUtils.fromTableOrNull(table);
+            if (MTMVPartitionUtil.isTableExcluded(mtmv.getExcludedTriggerTables(), tableNameInfo)) {
+                versions.put(baseTableInfo, visibleVersion);
+            }
+            return versions;
         }
     }
 }

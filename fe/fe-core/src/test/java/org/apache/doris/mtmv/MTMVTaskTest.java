@@ -17,6 +17,8 @@
 
 package org.apache.doris.mtmv;
 
+import org.apache.doris.catalog.DatabaseIf;
+import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.MTMV;
 import org.apache.doris.catalog.info.TableNameInfo;
 import org.apache.doris.common.AnalysisException;
@@ -28,7 +30,10 @@ import org.apache.doris.job.extensions.mtmv.MTMVTask.MTMVTaskTriggerMode;
 import org.apache.doris.job.extensions.mtmv.MTMVTaskContext;
 import org.apache.doris.mtmv.MTMVPartitionInfo.MTMVPartitionType;
 import org.apache.doris.mtmv.MTMVRefreshEnum.RefreshMethod;
+import org.apache.doris.mtmv.ivm.IvmExcludedTriggerTableVersionChecker;
+import org.apache.doris.mtmv.ivm.IvmExcludedTriggerTableVersionResult;
 import org.apache.doris.mtmv.ivm.IvmFailureReason;
+import org.apache.doris.mtmv.ivm.IvmInfo;
 import org.apache.doris.mtmv.ivm.IvmRefreshManager;
 import org.apache.doris.mtmv.ivm.IvmRefreshResult;
 import org.apache.doris.nereids.StatementContext;
@@ -84,6 +89,7 @@ public class MTMVTaskTest {
         Mockito.when(mtmv.getMvPartitionInfo()).thenReturn(mtmvPartitionInfo);
 
         Mockito.when(mtmvPartitionInfo.getPartitionType()).thenReturn(MTMVPartitionType.FOLLOW_BASE_TABLE);
+        Mockito.when(mtmvPartitionInfo.getPctInfos()).thenReturn(Collections.emptyList());
 
         // mtmvPartitionUtil.getPartitionsIdsByNames(mtmv, Lists.newArrayList(poneName));
         // minTimes = 0;
@@ -94,6 +100,7 @@ public class MTMVTaskTest {
         Mockito.when(mtmv.getRefreshInfo()).thenReturn(mtmvRefreshInfo);
 
         Mockito.when(mtmvRefreshInfo.getRefreshMethod()).thenReturn(RefreshMethod.COMPLETE);
+        Mockito.when(mtmv.getIvmInfo()).thenReturn(new IvmInfo());
     }
 
     @After
@@ -240,6 +247,102 @@ public class MTMVTaskTest {
 
         Assert.assertEquals(IvmFailureReason.BINLOG_NOT_ENABLED.name(),
                 Deencapsulation.getField(task, "ivmFallbackReason"));
+    }
+
+    @Test
+    public void testTryIvmFastPathRejectsManualIncrementalWhenExcludedBaselineDirty() {
+        Mockito.when(mtmv.isIvm()).thenReturn(true);
+        Mockito.when(mtmv.getName()).thenReturn("test_mv");
+        MTMVTask task = new MTMVTask(mtmv, relation,
+                new MTMVTaskContext(MTMVTaskTriggerMode.MANUAL, null, RefreshMode.INCREMENTAL));
+
+        try (MockedConstruction<IvmExcludedTriggerTableVersionChecker> ignored = Mockito.mockConstruction(
+                IvmExcludedTriggerTableVersionChecker.class,
+                (mock, context) -> Mockito.when(mock.check(mtmv, relation)).thenReturn(
+                        IvmExcludedTriggerTableVersionResult.dirty(Collections.emptyMap(),
+                                "COMPLETE refresh is required")))) {
+            org.apache.doris.job.exception.JobException exception = Assert.assertThrows(
+                    org.apache.doris.job.exception.JobException.class,
+                    () -> Deencapsulation.invoke(task, "tryIvmFastPath"));
+            Assert.assertTrue(exception.getMessage().contains("COMPLETE refresh"));
+        }
+
+        Assert.assertEquals(IvmFailureReason.EXCLUDED_TRIGGER_TABLE_CHANGED.name(),
+                Deencapsulation.getField(task, "ivmFallbackReason"));
+    }
+
+    @Test
+    public void testTryIvmFastPathFallbacksAutoWhenExcludedBaselineDirty() throws Exception {
+        Mockito.when(mtmv.isIvm()).thenReturn(true);
+        Mockito.when(mtmv.getName()).thenReturn("test_mv");
+        MTMVTask task = new MTMVTask(mtmv, relation,
+                new MTMVTaskContext(MTMVTaskTriggerMode.SYSTEM, null, RefreshMode.AUTO));
+
+        try (MockedConstruction<IvmExcludedTriggerTableVersionChecker> ignored = Mockito.mockConstruction(
+                IvmExcludedTriggerTableVersionChecker.class,
+                (mock, context) -> Mockito.when(mock.check(mtmv, relation)).thenReturn(
+                        IvmExcludedTriggerTableVersionResult.dirty(Collections.emptyMap(),
+                                "COMPLETE refresh is required")))) {
+            Assert.assertFalse(Deencapsulation.invoke(task, "tryIvmFastPath"));
+        }
+
+        Assert.assertEquals(IvmFailureReason.EXCLUDED_TRIGGER_TABLE_CHANGED.name(),
+                Deencapsulation.getField(task, "ivmFallbackReason"));
+        Assert.assertEquals(MTMVTask.MTMVTaskRefreshMode.COMPLETE,
+                Deencapsulation.getField(task, "refreshMode"));
+        Assert.assertEquals(allPartitionNames, Deencapsulation.getField(task, "needRefreshPartitions"));
+    }
+
+    @Test
+    public void testForceCompleteRefreshForIvmExcludedTableWhenOrdinarySyncIsFresh() throws Exception {
+        Mockito.when(mtmv.isIvm()).thenReturn(true);
+        MTMVTask task = new MTMVTask(mtmv, relation,
+                new MTMVTaskContext(MTMVTaskTriggerMode.SYSTEM, null, RefreshMode.AUTO));
+        Deencapsulation.setField(task, "needRefreshPartitions", Collections.emptyList());
+        Deencapsulation.setField(task, "refreshMode", MTMVTask.MTMVTaskRefreshMode.NOT_REFRESH);
+
+        try (MockedConstruction<IvmExcludedTriggerTableVersionChecker> ignored = Mockito.mockConstruction(
+                IvmExcludedTriggerTableVersionChecker.class,
+                (mock, context) -> Mockito.when(mock.check(mtmv, relation)).thenReturn(
+                        IvmExcludedTriggerTableVersionResult.dirty(Collections.emptyMap(),
+                                "COMPLETE refresh is required")))) {
+            Assert.assertTrue(Deencapsulation.invoke(task, "forceCompleteRefreshForIvmExcludedTriggerTable"));
+        }
+
+        Assert.assertEquals(MTMVTask.MTMVTaskRefreshMode.COMPLETE,
+                Deencapsulation.getField(task, "refreshMode"));
+        Assert.assertEquals(allPartitionNames, Deencapsulation.getField(task, "needRefreshPartitions"));
+        Assert.assertEquals(IvmFailureReason.EXCLUDED_TRIGGER_TABLE_CHANGED.name(),
+                Deencapsulation.getField(task, "ivmFallbackReason"));
+    }
+
+    @Test
+    public void testCompleteRefreshPersistsExcludedTriggerTableBaseline() throws Exception {
+        IvmInfo ivmInfo = new IvmInfo();
+        Mockito.when(mtmv.isIvm()).thenReturn(true);
+        Mockito.when(mtmv.getIvmInfo()).thenReturn(ivmInfo);
+        Mockito.when(mtmv.getRefreshPartitionNum()).thenReturn(MTMVTask.DEFAULT_REFRESH_PARTITION_NUM);
+        Mockito.when(mtmv.getQualifiedDbName()).thenReturn("test_db");
+        Mockito.when(mtmv.getName()).thenReturn("test_mv");
+        DatabaseIf database = Mockito.mock(DatabaseIf.class);
+        Mockito.when(database.getFullName()).thenReturn("test_db");
+        Mockito.when(mtmv.getDatabase()).thenReturn(database);
+        Mockito.when(mtmv.getExcludedTriggerTables()).thenReturn(Sets.newHashSet(
+                new TableNameInfo("internal", "test_db", "base_table")));
+        MTMVTask task = new MTMVTask(mtmv, relation,
+                new MTMVTaskContext(MTMVTaskTriggerMode.MANUAL, null, RefreshMode.COMPLETE));
+        Deencapsulation.setField(task, "needRefreshPartitions", Collections.emptyList());
+        Deencapsulation.setField(task, "refreshMode", MTMVTask.MTMVTaskRefreshMode.COMPLETE);
+        Env env = Mockito.mock(Env.class);
+
+        try (MockedStatic<Env> envStatic = Mockito.mockStatic(Env.class)) {
+            envStatic.when(Env::getCurrentEnv).thenReturn(env);
+            Deencapsulation.invoke(task, "executePartitionBasedRefresh", Mockito.mock(MTMVRefreshContext.class));
+        }
+
+        Assert.assertEquals("internal.test_db.base_table", ivmInfo.getExcludedTriggerTablesSignature());
+        Mockito.verify(env).alterMTMVIvmInfo(Mockito.eq(new TableNameInfo("test_db", "test_mv")),
+                Mockito.same(ivmInfo));
     }
 
     @Test

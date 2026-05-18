@@ -1037,7 +1037,7 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     // TODO: Add CREATE MV coverage for nullable-side UNION ALL after subquery alias is supported by IVM.
 
     @Test
-    public void testAlterExcludedTriggerTablesRejectsShrinkingCoverage() throws Exception {
+    public void testAlterExcludedTriggerTablesAllowsRemovingCoverage() throws Exception {
         createTable("create table test.ivm_alter_agg_base (k1 int, v1 int SUM)\n"
                 + "aggregate key(k1)\n"
                 + "distributed by hash(k1) buckets 1\n"
@@ -1050,12 +1050,10 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         MTMV mtmv = getMtmv("ivm_alter_excluded_mv");
         Assertions.assertTrue(mtmv.isIvm());
 
-        // Removing the AGG table from excluded_trigger_tables should fail validation
-        AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
-                () -> alterMtmv("ALTER MATERIALIZED VIEW ivm_alter_excluded_mv "
-                        + "SET ('excluded_trigger_tables' = '')"));
-        Assertions.assertTrue(ex.getMessage().contains("can only be expanded"),
-                "unexpected message: " + ex.getMessage());
+        alterMtmv("ALTER MATERIALIZED VIEW ivm_alter_excluded_mv "
+                + "SET ('excluded_trigger_tables' = '')");
+
+        Assertions.assertTrue(mtmv.getExcludedTriggerTables().isEmpty());
     }
 
     @Test
@@ -1080,7 +1078,7 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     }
 
     @Test
-    public void testAlterExcludedTriggerTablesRejectsNarrowingConfiguredScope() throws Exception {
+    public void testAlterExcludedTriggerTablesAllowsNarrowingConfiguredScope() throws Exception {
         createTable("create table test.ivm_narrow_agg_base (k1 int, v1 int SUM)\n"
                 + "aggregate key(k1)\n"
                 + "distributed by hash(k1) buckets 1\n"
@@ -1093,11 +1091,12 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         MTMV mtmv = getMtmv("ivm_narrow_excluded_mv");
         Assertions.assertTrue(mtmv.isIvm());
 
-        AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
-                () -> alterMtmv("ALTER MATERIALIZED VIEW ivm_narrow_excluded_mv "
-                        + "SET ('excluded_trigger_tables' = 'test.ivm_narrow_agg_base')"));
-        Assertions.assertTrue(ex.getMessage().contains("can only be expanded"),
-                "unexpected message: " + ex.getMessage());
+        alterMtmv("ALTER MATERIALIZED VIEW ivm_narrow_excluded_mv "
+                + "SET ('excluded_trigger_tables' = 'test.ivm_narrow_agg_base')");
+
+        Assertions.assertEquals(1, mtmv.getExcludedTriggerTables().size());
+        Assertions.assertTrue(mtmv.getExcludedTriggerTables().contains(
+                new TableNameInfo("test.ivm_narrow_agg_base")));
     }
 
     @Test

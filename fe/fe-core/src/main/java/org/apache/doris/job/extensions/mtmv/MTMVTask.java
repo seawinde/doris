@@ -57,6 +57,10 @@ import org.apache.doris.mtmv.MTMVRefreshPartitionSnapshot;
 import org.apache.doris.mtmv.MTMVRelatedTableIf;
 import org.apache.doris.mtmv.MTMVRelation;
 import org.apache.doris.mtmv.MTMVUtil;
+import org.apache.doris.mtmv.ivm.IvmExcludedTriggerTableVersionChecker;
+import org.apache.doris.mtmv.ivm.IvmExcludedTriggerTableVersionResult;
+import org.apache.doris.mtmv.ivm.IvmFailureReason;
+import org.apache.doris.mtmv.ivm.IvmInfo;
 import org.apache.doris.mtmv.ivm.IvmRefreshManager;
 import org.apache.doris.mtmv.ivm.IvmRefreshResult;
 import org.apache.doris.nereids.StatementContext;
@@ -160,6 +164,7 @@ public class MTMVTask extends AbstractTask {
     private StmtExecutor executor;
     private Map<String, MTMVRefreshPartitionSnapshot> partitionSnapshots;
     private long mtmvSchemaChangeVersion;
+    private IvmExcludedTriggerTableVersionResult excludedTriggerTableVersionResult;
 
     private Map<MvccTableInfo, MvccSnapshot> snapshots = Maps.newHashMap();
 
@@ -214,7 +219,9 @@ public class MTMVTask extends AbstractTask {
             }
             this.refreshMode = generateRefreshMode(needRefreshPartitions);
             if (refreshMode == MTMVTaskRefreshMode.NOT_REFRESH) {
-                return;
+                if (!forceCompleteRefreshForIvmExcludedTriggerTable()) {
+                    return;
+                }
             }
             if (tryIvmFastPath()) {
                 return;
@@ -274,6 +281,19 @@ public class MTMVTask extends AbstractTask {
         if (!mtmv.isIvm()
                 || (currentRefreshMode != RefreshMode.AUTO
                     && currentRefreshMode != RefreshMode.INCREMENTAL)) {
+            return false;
+        }
+        IvmExcludedTriggerTableVersionResult excludedVersionResult =
+                getExcludedTriggerTableVersionResult();
+        if (excludedVersionResult.isDirty()) {
+            ivmFallbackReason = IvmFailureReason.EXCLUDED_TRIGGER_TABLE_CHANGED.name();
+            if (currentRefreshMode == RefreshMode.INCREMENTAL) {
+                throw new JobException(excludedVersionResult.getReason());
+            }
+            LOG.warn("IVM refresh fell back for mv={}, reason={}, detail={}, taskId={}. "
+                            + "Continuing with COMPLETE refresh.",
+                    mtmv.getName(), ivmFallbackReason, excludedVersionResult.getReason(), getTaskId());
+            forceCompleteRefreshForIvmExcludedTriggerTable();
             return false;
         }
         IvmRefreshManager ivmRefreshManager = new IvmRefreshManager();
@@ -336,14 +356,23 @@ public class MTMVTask extends AbstractTask {
             partitionSnapshots.putAll(execPartitionSnapshots);
         }
         if (mtmv.isIvm()) {
+            boolean ivmInfoPersisted = false;
+            if (refreshMode == MTMVTaskRefreshMode.COMPLETE) {
+                updateExcludedTriggerTableVersionBaseline();
+            }
             if (ivmPreRefreshTsos != null && !ivmPreRefreshTsos.isEmpty()) {
                 IvmRefreshManager.resetIvmStateAfterFullRefresh(mtmv, ivmPreRefreshTsos);
+                ivmInfoPersisted = true;
             }
             if (mtmv.getIvmInfo().isRunningIvmRefresh()) {
                 // TODO(IVM): Re-enable consumedTso reset after ivmPreRefreshTsos is
                 // captured from a real TSO snapshot. Until then, only clear the
                 // recovery flag so manual COMPLETE/INCREMENTAL refresh can continue.
                 IvmRefreshManager.clearRunningIvmRefreshAfterFullRefresh(mtmv);
+                ivmInfoPersisted = true;
+            }
+            if (refreshMode == MTMVTaskRefreshMode.COMPLETE && !ivmInfoPersisted) {
+                persistIvmInfo(mtmv.getIvmInfo());
             }
         }
         LOG.info("MTMVTask refresh used snapshot: {}, mvDbName: {}, mvName: {}, taskId: {}", partitionSnapshots,
@@ -656,6 +685,46 @@ public class MTMVTask extends AbstractTask {
             }
         }
         return tableWithPartKey;
+    }
+
+    private boolean forceCompleteRefreshForIvmExcludedTriggerTable() {
+        if (!mtmv.isIvm()) {
+            return false;
+        }
+        IvmExcludedTriggerTableVersionResult excludedVersionResult =
+                getExcludedTriggerTableVersionResult();
+        if (!excludedVersionResult.isDirty()) {
+            return false;
+        }
+        this.needRefreshPartitions = Lists.newArrayList(mtmv.getPartitionNames());
+        this.refreshMode = MTMVTaskRefreshMode.COMPLETE;
+        this.ivmFallbackReason = IvmFailureReason.EXCLUDED_TRIGGER_TABLE_CHANGED.name();
+        return true;
+    }
+
+    private IvmExcludedTriggerTableVersionResult getExcludedTriggerTableVersionResult() {
+        if (excludedTriggerTableVersionResult == null) {
+            excludedTriggerTableVersionResult = new IvmExcludedTriggerTableVersionChecker()
+                    .check(mtmv, relation);
+        }
+        return excludedTriggerTableVersionResult;
+    }
+
+    private void updateExcludedTriggerTableVersionBaseline() {
+        IvmExcludedTriggerTableVersionChecker checker = new IvmExcludedTriggerTableVersionChecker();
+        Map<BaseTableInfo, Long> excludedTriggerTableVersions =
+                checker.captureExcludedTriggerTableVersions(mtmv, relation);
+        IvmInfo ivmInfo = mtmv.getIvmInfo();
+        ivmInfo.setExcludedTriggerTableVersions(excludedTriggerTableVersions);
+        ivmInfo.setExcludedTriggerTablesSignature(
+                checker.excludedTriggerTablesSignature(mtmv.getExcludedTriggerTables()));
+        excludedTriggerTableVersionResult = IvmExcludedTriggerTableVersionResult
+                .clean(excludedTriggerTableVersions);
+    }
+
+    private void persistIvmInfo(IvmInfo ivmInfo) {
+        Env.getCurrentEnv().alterMTMVIvmInfo(
+                new TableNameInfo(mtmv.getQualifiedDbName(), mtmv.getName()), ivmInfo);
     }
 
     private MTMVTaskRefreshMode generateRefreshMode(List<String> needRefreshPartitionIds) {

@@ -94,7 +94,6 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import org.apache.commons.collections4.CollectionUtils;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -598,31 +597,6 @@ public class MTMVPlanUtil {
         }
         return MTMVPropertyUtil.parseTableNameInfos(
                 mvProperties.get(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES));
-    }
-
-    public static void validateAlterExcludedTriggerTables(MTMV mtmv, Map<String, String> mvProperties) {
-        Set<TableNameInfo> oldExcludedTriggerTables = mtmv.getExcludedTriggerTables();
-        Set<TableNameInfo> newExcludedTriggerTables = getExcludedTriggerTables(mvProperties);
-        for (TableNameInfo oldExcludedTriggerTable : oldExcludedTriggerTables) {
-            boolean isCovered = newExcludedTriggerTables.stream()
-                    .anyMatch(newExcludedTriggerTable -> isExcludedTriggerTableScopeCovered(
-                            oldExcludedTriggerTable, newExcludedTriggerTable));
-            if (!isCovered) {
-                throw new AnalysisException(
-                        "Cannot ALTER excluded_trigger_tables to narrow existing entry '"
-                                + oldExcludedTriggerTable
-                                + "'. Existing excluded trigger tables can only be expanded.");
-            }
-        }
-    }
-
-    private static boolean isExcludedTriggerTableScopeCovered(TableNameInfo oldExcludedTriggerTable,
-            TableNameInfo newExcludedTriggerTable) {
-        return oldExcludedTriggerTable.getTbl().equals(newExcludedTriggerTable.getTbl())
-                && (StringUtils.isEmpty(newExcludedTriggerTable.getDb())
-                        || newExcludedTriggerTable.getDb().equals(oldExcludedTriggerTable.getDb()))
-                && (StringUtils.isEmpty(newExcludedTriggerTable.getCtl())
-                        || newExcludedTriggerTable.getCtl().equals(oldExcludedTriggerTable.getCtl()));
     }
 
     /**

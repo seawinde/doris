@@ -32,6 +32,8 @@ import org.apache.doris.common.util.MetaLockUtils;
 import org.apache.doris.mtmv.MTMVPartitionInfo.MTMVPartitionType;
 import org.apache.doris.mtmv.MTMVPartitionUtil;
 import org.apache.doris.mtmv.MTMVRelatedTableIf;
+import org.apache.doris.mtmv.ivm.IvmExcludedTriggerTableVersionChecker;
+import org.apache.doris.mtmv.ivm.IvmExcludedTriggerTableVersionResult;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.util.Utils;
@@ -110,6 +112,13 @@ public class RefreshMTMVInfo {
             throw new AnalysisException(
                     "partitionSpec is not allowed on a materialized view with INCREMENTAL capability, "
                             + "use PARTITIONS keyword instead.");
+        }
+        if (isIvm && refreshMode == RefreshMode.INCREMENTAL) {
+            IvmExcludedTriggerTableVersionResult excludedVersionResult =
+                    new IvmExcludedTriggerTableVersionChecker().check(mtmv, mtmv.getRelation());
+            if (excludedVersionResult.isDirty()) {
+                throw new AnalysisException(excludedVersionResult.getReason());
+            }
         }
     }
 

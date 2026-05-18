@@ -42,8 +42,15 @@ public class IvmInfo {
     @SerializedName("bs")
     private Map<BaseTableInfo, IvmStreamRef> baseTableStreams;
 
+    @SerializedName("etv")
+    private Map<BaseTableInfo, Long> excludedTriggerTableVersions;
+
+    @SerializedName("ets")
+    private String excludedTriggerTablesSignature;
+
     public IvmInfo() {
         this.baseTableStreams = Maps.newHashMap();
+        this.excludedTriggerTableVersions = Maps.newHashMap();
     }
 
     public boolean isEnableIvm() {
@@ -78,6 +85,26 @@ public class IvmInfo {
         this.baseTableStreams = baseTableStreams;
     }
 
+    public Map<BaseTableInfo, Long> getExcludedTriggerTableVersions() {
+        if (excludedTriggerTableVersions == null) {
+            excludedTriggerTableVersions = Maps.newHashMap();
+        }
+        return excludedTriggerTableVersions;
+    }
+
+    public void setExcludedTriggerTableVersions(Map<BaseTableInfo, Long> excludedTriggerTableVersions) {
+        this.excludedTriggerTableVersions = excludedTriggerTableVersions == null
+                ? Maps.newHashMap() : excludedTriggerTableVersions;
+    }
+
+    public String getExcludedTriggerTablesSignature() {
+        return excludedTriggerTablesSignature;
+    }
+
+    public void setExcludedTriggerTablesSignature(String excludedTriggerTablesSignature) {
+        this.excludedTriggerTablesSignature = excludedTriggerTablesSignature;
+    }
+
     @Override
     public String toString() {
         return "IvmInfo{"
@@ -85,6 +112,8 @@ public class IvmInfo {
                 + ", binlogBroken=" + binlogBroken
                 + ", runningIvmRefresh=" + runningIvmRefresh
                 + ", baseTableStreams=" + baseTableStreams
+                + ", excludedTriggerTableVersions=" + excludedTriggerTableVersions
+                + ", excludedTriggerTablesSignature=" + excludedTriggerTablesSignature
                 + '}';
     }
 }
