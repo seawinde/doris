@@ -106,7 +106,7 @@ public class LogicalOlapTableStreamScan extends LogicalOlapScan {
                 indexSelected, preAggStatus, specifiedPartitions, hints, cacheSlotWithSlotName, cachedOutput,
                 tableSample, directMvScan, colToSubPathsMap, specifiedTabletIds, operativeSlots, virtualColumns,
                 scoreOrderKeys, scoreLimit, scoreRangeInfo, annOrderKeys, annLimit, tableAlias,
-                partitionPrunablePredicates, scanParams);
+                partitionPrunablePredicates, scanParams, -1, false);
         this.isNormalized = isNormalized;
         this.isIncrementalScan = isIncrementalScan;
     }
