@@ -445,6 +445,9 @@ public class MTMVTask extends AbstractTask {
             MTMVRefreshContext context = buildRefreshContext(tableIfs);
             return PartitionRefreshPlan.success(context, request.partitions);
         }
+        if (!mtmv.hasCompleteRefreshSnapshot()) {
+            return PartitionRefreshPlan.fallback("Refresh snapshot is incomplete; full refresh is required");
+        }
         if (mtmv.getMvPartitionInfo().getPartitionType() == MTMVPartitionType.SELF_MANAGE) {
             // Keep this inside the PARTITIONS attempt so PARTITIONS FALLBACK and
             // AUTO can still continue to COMPLETE for non-partitioned MVs.
@@ -501,6 +504,16 @@ public class MTMVTask extends AbstractTask {
         if (!mtmv.isIvm()) {
             throw new JobException("Cannot use " + request.refreshMode
                     + " refresh on a materialized view without INCREMENTAL capability.");
+        }
+        if (!mtmv.hasCompleteRefreshSnapshot()) {
+            ivmFallbackReason = "INCOMPLETE_REFRESH_SNAPSHOT";
+            if (!request.allowFallback) {
+                throw new JobException("IVM incremental refresh failed for mv=" + mtmv.getName()
+                        + ", reason=INCOMPLETE_REFRESH_SNAPSHOT, detail=Run a full refresh to rebuild baseline");
+            }
+            LOG.warn("IVM refresh fell back for mv={}, reason=INCOMPLETE_REFRESH_SNAPSHOT, taskId={}. "
+                    + "Continuing with COMPLETE refresh.", mtmv.getName(), getTaskId());
+            return AttemptResultType.FALLBACK_TO_COMPLETE;
         }
         IvmRefreshManager ivmRefreshManager = new IvmRefreshManager();
         ivmFallbackPlanSignature = null;
