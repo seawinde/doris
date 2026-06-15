@@ -59,7 +59,7 @@ suite("test_ivm_plan_signature_fallback", "nonConcurrent") {
 
     try {
         GetDebugPoint().enableDebugPointForAllFEs(signatureSaltDebugPoint, [value: "plan_changed"])
-        sql """REFRESH MATERIALIZED VIEW ${mvName} INCREMENTAL FALLBACK"""
+        sql """REFRESH MATERIALIZED VIEW ${mvName} AUTO"""
         waitingMTMVTaskFinishedByMvName(mvName)
     } finally {
         GetDebugPoint().disableDebugPointForAllFEs(signatureSaltDebugPoint)

@@ -214,13 +214,32 @@ public class RefreshMTMVInfoAnalyzeTest {
         Assertions.assertTrue(exception.getMessage().contains("PARTITIONS"));
     }
 
-    // Manual AUTO is not a concrete refresh type.
     @Test
-    public void testRefreshAutoOnIvmMVRejected() throws Exception {
+    public void testRefreshAutoOnIvmMVAllowedForCompatibility() throws Exception {
         setupMvLookup(ivmMtmv);
         RefreshMTMVInfo info = createInfo(RefreshMode.AUTO);
-        AnalysisException exception = analyzeAndGetException(info);
-        Assertions.assertTrue(exception.getMessage().contains("AUTO"));
+        info.analyze(ctx);
+    }
+
+    @Test
+    public void testRefreshAutoOnCompleteMVAllowedForCompatibility() throws Exception {
+        setupMvLookup(completeMtmv);
+        RefreshMTMVInfo info = createInfo(RefreshMode.AUTO);
+        info.analyze(ctx);
+    }
+
+    @Test
+    public void testRefreshAutoOnPartitionsMVAllowedForCompatibility() throws Exception {
+        setupMvLookup(partitionMtmv);
+        RefreshMTMVInfo info = createInfo(RefreshMode.AUTO);
+        info.analyze(ctx);
+    }
+
+    @Test
+    public void testRefreshAutoOnAutoMVAllowedForCompatibility() throws Exception {
+        setupMvLookup(autoWithIvmMtmv);
+        RefreshMTMVInfo info = createInfo(RefreshMode.AUTO);
+        info.analyze(ctx);
     }
 
     // IVM-capable MV with REFRESH ... INCREMENTAL should succeed

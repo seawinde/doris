@@ -139,7 +139,8 @@ public class RefreshMTMVInfo {
 
     private boolean isRefreshModeCompatible(MTMV mtmv, RefreshMethod mvRefreshMethod) {
         if (refreshMode == RefreshMode.AUTO) {
-            return false;
+            // Keep compatibility with legacy manual REFRESH ... AUTO syntax.
+            return true;
         }
         switch (mvRefreshMethod) {
             case COMPLETE:
