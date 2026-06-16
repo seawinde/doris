@@ -51,7 +51,7 @@ suite("test_excluded_trigger_table_mtmv","mtmv") {
         insert into ${tableName} values(1,1);
         """
      sql """
-        REFRESH MATERIALIZED VIEW ${mvName} COMPLETE
+        REFRESH MATERIALIZED VIEW ${mvName} AUTO
         """
     waitingMTMVTaskFinishedByMvName(mvName)
     order_qt_init "SELECT * FROM ${mvName}"
@@ -62,7 +62,7 @@ suite("test_excluded_trigger_table_mtmv","mtmv") {
             alter Materialized View ${mvName} set("excluded_trigger_tables"="${tableName}");
         """
     sql """
-        REFRESH MATERIALIZED VIEW ${mvName} COMPLETE
+        REFRESH MATERIALIZED VIEW ${mvName} AUTO
         """
     waitingMTMVTaskFinishedByMvName(mvName)
     // should refresh because excluded_trigger_tables changed and refresh baseline should be rebuilt
@@ -75,7 +75,7 @@ suite("test_excluded_trigger_table_mtmv","mtmv") {
             alter Materialized View ${mvName} set("excluded_trigger_tables"="${dbName}.${tableName}");
         """
      sql """
-         REFRESH MATERIALIZED VIEW ${mvName} COMPLETE
+         REFRESH MATERIALIZED VIEW ${mvName} AUTO
          """
     waitingMTMVTaskFinishedByMvName(mvName)
      // should refresh because excluded_trigger_tables changed and refresh baseline should be rebuilt
@@ -88,7 +88,7 @@ suite("test_excluded_trigger_table_mtmv","mtmv") {
             alter Materialized View ${mvName} set("excluded_trigger_tables"="internal.${dbName}.${tableName}");
         """
      sql """
-         REFRESH MATERIALIZED VIEW ${mvName} COMPLETE
+         REFRESH MATERIALIZED VIEW ${mvName} AUTO
          """
     waitingMTMVTaskFinishedByMvName(mvName)
      // should refresh because excluded_trigger_tables changed and refresh baseline should be rebuilt
@@ -101,7 +101,7 @@ suite("test_excluded_trigger_table_mtmv","mtmv") {
             alter Materialized View ${mvName} set("excluded_trigger_tables"="internal1.${dbName}.${tableName}");
         """
      sql """
-         REFRESH MATERIALIZED VIEW ${mvName} COMPLETE
+         REFRESH MATERIALIZED VIEW ${mvName} AUTO
          """
     waitingMTMVTaskFinishedByMvName(mvName)
      // should refresh
@@ -114,7 +114,7 @@ suite("test_excluded_trigger_table_mtmv","mtmv") {
             alter Materialized View ${mvName} set("excluded_trigger_tables"="${dbName}1.${tableName}");
         """
      sql """
-         REFRESH MATERIALIZED VIEW ${mvName} COMPLETE
+         REFRESH MATERIALIZED VIEW ${mvName} AUTO
          """
     waitingMTMVTaskFinishedByMvName(mvName)
      // should refresh
@@ -127,7 +127,7 @@ suite("test_excluded_trigger_table_mtmv","mtmv") {
             alter Materialized View ${mvName} set("excluded_trigger_tables"="${tableName}1");
         """
      sql """
-         REFRESH MATERIALIZED VIEW ${mvName} COMPLETE
+         REFRESH MATERIALIZED VIEW ${mvName} AUTO
          """
     waitingMTMVTaskFinishedByMvName(mvName)
      // should refresh
