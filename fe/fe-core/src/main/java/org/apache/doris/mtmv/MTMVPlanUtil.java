@@ -48,7 +48,10 @@ import org.apache.doris.datasource.ExternalTable;
 import org.apache.doris.job.exception.JobException;
 import org.apache.doris.job.task.AbstractTask;
 import org.apache.doris.mtmv.MTMVPartitionInfo.MTMVPartitionType;
+import org.apache.doris.mtmv.ivm.IvmNormalizeResult;
 import org.apache.doris.mtmv.ivm.IvmUtil;
+import org.apache.doris.mtmv.ivm.agg.IvmAggMeta;
+import org.apache.doris.mtmv.ivm.agg.IvmAggTarget;
 import org.apache.doris.nereids.NereidsPlanner;
 import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.analyzer.UnboundResultSink;
@@ -99,10 +102,12 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
@@ -590,7 +595,9 @@ public class MTMVPlanUtil {
                     (distribution == null || CollectionUtils.isEmpty(distribution.getCols())) ? Sets.newHashSet()
                             : Sets.newHashSet(distribution.getCols()),
                     simpleColumnDefinitions, properties);
-            keys = analyzeKeys(keys, properties, columns, isIvm);
+            Optional<IvmNormalizeResult> ivmNormalizeResult = planner.getCascadesContext().getIvmNormalizeResult();
+            keys = analyzeKeys(keys, properties, columns, isIvm, mvPartitionInfo, distribution,
+                    ivmNormalizeResult.orElse(null));
             properties = CreateTableInfo.addOlapHiddenColumns(
                     columns, isIvm ? KeysType.UNIQUE_KEYS : KeysType.DUP_KEYS,
                     isIvm, properties, false);
@@ -601,8 +608,7 @@ public class MTMVPlanUtil {
             validateColumns(columns, keysSet, finalEnableMergeOnWrite);
             MTMVAnalyzeQueryInfo queryInfo = new MTMVAnalyzeQueryInfo(columns, mvPartitionInfo, relation, properties);
             if (isIvm) {
-                planner.getCascadesContext().getIvmNormalizeResult().ifPresent(
-                        queryInfo::setIvmNormalizeResult);
+                ivmNormalizeResult.ifPresent(queryInfo::setIvmNormalizeResult);
             }
             return queryInfo;
         }
@@ -660,17 +666,10 @@ public class MTMVPlanUtil {
     }
 
     private static List<String> analyzeKeys(List<String> keys, Map<String, String> properties,
-            List<ColumnDefinition> columns, boolean isIvm) {
+            List<ColumnDefinition> columns, boolean isIvm, MTMVPartitionInfo mvPartitionInfo,
+            DistributionDescriptor distribution, IvmNormalizeResult ivmNormalizeResult) {
         if (isIvm) {
-            // for IVM, the hidden row-id column is the sole unique key
-            for (ColumnDefinition col : columns) {
-                if (Column.IVM_ROW_ID_COL.equals(col.getName())) {
-                    col.setIsKey(true);
-                    return Lists.newArrayList(col.getName());
-                }
-            }
-            throw new org.apache.doris.nereids.exceptions.AnalysisException(
-                    "IVM row-id column not found in generated columns; IVM normalization may have failed.");
+            return analyzeIvmKeys(keys, columns, mvPartitionInfo, distribution, ivmNormalizeResult);
         }
         boolean enableDuplicateWithoutKeysByDefault = false;
         try {
@@ -710,6 +709,113 @@ public class MTMVPlanUtil {
             }
         }
         return keys;
+    }
+
+    private static List<String> analyzeIvmKeys(List<String> keys, List<ColumnDefinition> columns,
+            MTMVPartitionInfo mvPartitionInfo, DistributionDescriptor distribution,
+            IvmNormalizeResult ivmNormalizeResult) {
+        Map<String, ColumnDefinition> columnMap = columns.stream()
+                .collect(Collectors.toMap(ColumnDefinition::getName, column -> column,
+                        (left, right) -> left, () -> new TreeMap<>(String.CASE_INSENSITIVE_ORDER)));
+        if (!columnMap.containsKey(Column.IVM_ROW_ID_COL)) {
+            throw new org.apache.doris.nereids.exceptions.AnalysisException(
+                    "IVM row-id column not found in generated columns; IVM normalization may have failed.");
+        }
+
+        LinkedHashSet<String> finalKeys = new LinkedHashSet<>();
+        if (!CollectionUtils.isEmpty(keys)) {
+            for (String key : keys) {
+                validateIvmKeyColumn(columnMap, key);
+                finalKeys.add(columnMap.get(key).getName());
+            }
+            validateIvmExplicitKeysCoverLayout(finalKeys, mvPartitionInfo, distribution);
+            validateIvmExplicitKeysForAggregate(finalKeys, ivmNormalizeResult);
+        } else {
+            if (mvPartitionInfo != null && mvPartitionInfo.getPartitionType() != MTMVPartitionType.SELF_MANAGE) {
+                validateIvmKeyColumn(columnMap, mvPartitionInfo.getPartitionCol());
+                finalKeys.add(columnMap.get(mvPartitionInfo.getPartitionCol()).getName());
+            }
+            if (distribution != null && !CollectionUtils.isEmpty(distribution.getCols())) {
+                for (String distributionColumn : distribution.getCols()) {
+                    validateIvmKeyColumn(columnMap, distributionColumn);
+                    finalKeys.add(columnMap.get(distributionColumn).getName());
+                }
+            }
+        }
+        finalKeys.add(Column.IVM_ROW_ID_COL);
+
+        List<ColumnDefinition> reorderedColumns = new ArrayList<>(columns.size());
+        for (String key : finalKeys) {
+            reorderedColumns.add(columnMap.get(key));
+        }
+        for (ColumnDefinition column : columns) {
+            if (!containsIgnoreCase(finalKeys, column.getName())) {
+                reorderedColumns.add(column);
+            }
+        }
+        columns.clear();
+        columns.addAll(reorderedColumns);
+        for (int i = 0; i < columns.size(); i++) {
+            columns.get(i).setIsKey(i < finalKeys.size());
+        }
+        return Lists.newArrayList(finalKeys);
+    }
+
+    private static void validateIvmExplicitKeysForAggregate(Set<String> keySet,
+            IvmNormalizeResult ivmNormalizeResult) {
+        if (ivmNormalizeResult == null || !ivmNormalizeResult.isAggMv()) {
+            return;
+        }
+        IvmAggMeta aggMeta = ivmNormalizeResult.getAggMeta();
+        for (Slot groupKey : aggMeta.getGroupKeySlots()) {
+            if (!containsIgnoreCase(keySet, groupKey.getName())) {
+                throw new AnalysisException("IVM aggregate materialized view key must contain group key column: "
+                        + groupKey.getName());
+            }
+        }
+        for (IvmAggTarget target : aggMeta.getAggTargets()) {
+            if (containsIgnoreCase(keySet, target.getVisibleSlot().getName())) {
+                throw new AnalysisException(
+                        "IVM aggregate materialized view key can not contain aggregate result column: "
+                        + target.getVisibleSlot().getName());
+            }
+        }
+    }
+
+    private static void validateIvmExplicitKeysCoverLayout(Set<String> keySet, MTMVPartitionInfo mvPartitionInfo,
+            DistributionDescriptor distribution) {
+        if (mvPartitionInfo != null && mvPartitionInfo.getPartitionType() != MTMVPartitionType.SELF_MANAGE
+                && !containsIgnoreCase(keySet, mvPartitionInfo.getPartitionCol())) {
+            throw new AnalysisException("IVM materialized view partition column must be key column: "
+                    + mvPartitionInfo.getPartitionCol());
+        }
+        if (distribution != null && !CollectionUtils.isEmpty(distribution.getCols())) {
+            for (String distributionColumn : distribution.getCols()) {
+                if (!containsIgnoreCase(keySet, distributionColumn)) {
+                    throw new AnalysisException("IVM materialized view distribution column must be key column: "
+                            + distributionColumn);
+                }
+            }
+        }
+    }
+
+    private static void validateIvmKeyColumn(Map<String, ColumnDefinition> columnMap, String columnName) {
+        if (!columnMap.containsKey(columnName)) {
+            throw new AnalysisException("IVM key column does not exist in MV output: " + columnName);
+        }
+        ColumnDefinition column = columnMap.get(columnName);
+        if (IvmUtil.isIvmHiddenColumn(column.getName()) && !Column.IVM_ROW_ID_COL.equals(column.getName())) {
+            throw new AnalysisException("IVM aggregate hidden column can not be key column: " + columnName);
+        }
+    }
+
+    private static boolean containsIgnoreCase(Set<String> values, String value) {
+        for (String item : values) {
+            if (item.equalsIgnoreCase(value)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void analyzeExpressions(Plan plan, Map<String, String> mvProperties) {

@@ -175,15 +175,13 @@ public class CreateMTMVInfo extends CreateTableInfo {
             properties = Maps.newHashMap();
         }
 
-        // IVM MVs are UNIQUE_KEYS (MOW) tables keyed on __DORIS_IVM_ROW_ID_COL__.
-        // MOW dedup only works within the same tablet, so the distribution MUST be
-        // HASH on the row-id column; RANDOM distribution would allow the same key
-        // to land in different tablets across successive INSERTs, breaking dedup.
         if (isEnableIvm()) {
-            int bucketNum = distribution.translateToCatalogStyle().getBuckets();
-            distribution = new DistributionDescriptor(
-                    true, distribution.isAutoBucket(), bucketNum,
-                    Lists.newArrayList(Column.IVM_ROW_ID_COL));
+            if (!distribution.isHash() || distribution.getCols() == null || distribution.getCols().isEmpty()) {
+                int bucketNum = distribution.translateToCatalogStyle().getBuckets();
+                distribution = new DistributionDescriptor(
+                        true, distribution.isAutoBucket(), bucketNum,
+                        Lists.newArrayList(Column.IVM_ROW_ID_COL));
+            }
         }
 
         CreateTableInfo.maybeRewriteByAutoBucket(distribution, properties);
@@ -308,10 +306,10 @@ public class CreateMTMVInfo extends CreateTableInfo {
     }
 
     private void checkUserSpecifiedKeysForIvm() {
-        if (isEnableIvm() && !keys.isEmpty()) {
+        if (isEnableIvm() && keys.stream().anyMatch(Column.IVM_ROW_ID_COL::equalsIgnoreCase)) {
             throw new IvmException(IvmFailureReason.PLAN_PATTERN_UNSUPPORTED,
-                    "Incremental materialized view does not allow specifying key columns. "
-                    + "The unique key is the hidden row-id column managed by IVM.");
+                    "Incremental materialized view does not allow specifying the hidden row-id column. "
+                    + "The row-id column is managed by IVM.");
         }
     }
 
