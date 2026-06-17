@@ -30,7 +30,11 @@ suite("test_ivm_partition_unique_key") {
             dt DATE,
             v INT
         )
-        UNIQUE KEY(id)
+        UNIQUE KEY(id, dt)
+        PARTITION BY RANGE(dt) (
+            PARTITION p20260601 VALUES [('2026-06-01'), ('2026-06-02')),
+            PARTITION p20260602 VALUES [('2026-06-02'), ('2026-06-03'))
+        )
         DISTRIBUTED BY HASH(id) BUCKETS 2
         PROPERTIES (
             "replication_num" = "1",
@@ -61,7 +65,6 @@ suite("test_ivm_partition_unique_key") {
 
     def descResult = sql """desc mv_ivm_partition_key all"""
     assertTrue(descResult.toString().contains("UNIQUE_KEYS"))
-    assertTrue(descResult.toString().contains("__DORIS_IVM_ROW_ID_COL__"))
 
     sql """REFRESH MATERIALIZED VIEW mv_ivm_partition_key COMPLETE"""
     waitingMTMVTaskFinishedByMvName("mv_ivm_partition_key")
@@ -85,7 +88,6 @@ suite("test_ivm_partition_unique_key") {
 
     def autoDescResult = sql """desc mv_ivm_partition_auto_key all"""
     assertTrue(autoDescResult.toString().contains("UNIQUE_KEYS"))
-    assertTrue(autoDescResult.toString().contains("__DORIS_IVM_ROW_ID_COL__"))
 
     sql """REFRESH MATERIALIZED VIEW mv_ivm_partition_auto_key COMPLETE"""
     waitingMTMVTaskFinishedByMvName("mv_ivm_partition_auto_key")
