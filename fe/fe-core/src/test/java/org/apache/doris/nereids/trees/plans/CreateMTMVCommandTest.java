@@ -19,6 +19,7 @@ package org.apache.doris.nereids.trees.plans;
 
 import org.apache.doris.analysis.PartitionDesc;
 import org.apache.doris.analysis.SinglePartitionDesc;
+import org.apache.doris.catalog.AggregateType;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
@@ -33,6 +34,7 @@ import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.trees.plans.commands.AlterMTMVCommand;
 import org.apache.doris.nereids.trees.plans.commands.CreateMTMVCommand;
 import org.apache.doris.nereids.trees.plans.commands.CreateTableCommand;
+import org.apache.doris.nereids.trees.plans.commands.info.ColumnDefinition;
 import org.apache.doris.nereids.trees.plans.commands.info.CreateMTMVInfo;
 import org.apache.doris.nereids.trees.plans.commands.info.FixedRangePartition;
 import org.apache.doris.nereids.trees.plans.commands.info.InPartition;
@@ -1118,6 +1120,45 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         Assertions.assertNotEquals(PartitionTableInfo.EMPTY, info.getPartitionTableInfo());
         Assertions.assertEquals(2, info.getPartitionTableInfo().getPartitionDefs().size());
+    }
+
+    @Test
+    public void testCreateIncrementalMVReusesMowPartitionKeyValidation() throws Exception {
+        createTable("CREATE TABLE test.ivm_partition_mow_validate_base (\n"
+                + " `k1` INT NOT NULL,\n"
+                + " `dt` DATE NOT NULL,\n"
+                + " `v1` INT\n"
+                + " ) ENGINE=OLAP\n"
+                + " DUPLICATE KEY(`k1`, `dt`)\n"
+                + " PARTITION BY RANGE(`dt`)\n"
+                + " (\n"
+                + " PARTITION `p202401` VALUES [(\"2024-01-01\"), (\"2024-02-01\"))\n"
+                + " )\n"
+                + " DISTRIBUTED BY HASH(`k1`) BUCKETS 1\n"
+                + " PROPERTIES ('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
+
+        CreateMTMVInfo info = getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_partition_mow_validate_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " PARTITION BY(`dt`)\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS SELECT k1, dt, v1 FROM ivm_partition_mow_validate_base;");
+
+        ColumnDefinition partitionColumn = info.getColumnDefinitions().stream()
+                .filter(column -> column.getName().equalsIgnoreCase("dt"))
+                .findFirst()
+                .orElseThrow();
+        partitionColumn.setIsKey(false);
+        partitionColumn.setAggType(AggregateType.NONE);
+
+        Exception ex = Assertions.assertThrows(Exception.class, () -> {
+            java.lang.reflect.Method method = CreateMTMVInfo.class.getDeclaredMethod(
+                    "validatePartitionInfo", org.apache.doris.qe.ConnectContext.class);
+            method.setAccessible(true);
+            method.invoke(info, connectContext);
+        });
+        Assertions.assertTrue(ex.getCause().getMessage()
+                        .contains("Merge-on-Write table's partition column must be KEY column"),
+                "unexpected message: " + ex.getCause().getMessage());
     }
 
     @Test

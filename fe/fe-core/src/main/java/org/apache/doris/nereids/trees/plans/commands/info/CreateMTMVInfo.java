@@ -417,13 +417,17 @@ public class CreateMTMVInfo extends CreateTableInfo {
             }
         });
 
+        // CreateMTMVInfo does not run CreateTableInfo.validate(), but an IVM MV
+        // is physically a MOW UNIQUE table. Reuse the ordinary MOW partition
+        // rule so partition columns must be key columns after IVM key rewrite.
+        boolean validateAsMow = isEnableIvm() || isEnableMergeOnWrite();
         getPartitionTableInfo().validatePartitionInfo(
                 getEngineName(),
                 columns,
                 columnMap,
                 properties,
                 ctx,
-                isEnableMergeOnWrite(),
+                validateAsMow,
                 isExternal());
     }
 
