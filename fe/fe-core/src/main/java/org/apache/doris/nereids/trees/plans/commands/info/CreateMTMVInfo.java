@@ -28,6 +28,7 @@ import org.apache.doris.catalog.PartitionType;
 import org.apache.doris.catalog.info.TableNameInfo;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
+import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.FeNameFormat;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.UserException;
@@ -167,9 +168,6 @@ public class CreateMTMVInfo extends CreateTableInfo {
         }
         validateRefreshStrategyForCreate();
         this.partitionDesc = generatePartitionDesc(ctx);
-        if (distribution == null) {
-            throw new AnalysisException("Create async materialized view should contain distribution desc");
-        }
 
         if (properties == null) {
             properties = Maps.newHashMap();
@@ -178,11 +176,14 @@ public class CreateMTMVInfo extends CreateTableInfo {
         // analyze distribute
         Map<String, ColumnDefinition> columnMap = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         columns.forEach(c -> columnMap.put(c.getName(), c));
-        distribution.updateCols(columns.get(0).getName());
         KeysType distributionKeysType = isEnableIvm() ? KeysType.UNIQUE_KEYS : KeysType.DUP_KEYS;
         if (isEnableIvm()) {
-            validateUserDistributionForIvm(columnMap);
+            if (distribution != null) {
+                validateUserDistributionForIvm(columnMap);
+            }
             distribution = buildIvmRowIdDistribution(distribution);
+        } else if (distribution == null) {
+            distribution = new DistributionDescriptor(false, false, FeConstants.default_bucket_num, null);
         }
 
         properties = CreateTableInfo.maybeRewriteByAutoBucket(distribution, properties);
@@ -198,18 +199,17 @@ public class CreateMTMVInfo extends CreateTableInfo {
     }
 
     private void validateUserDistributionForIvm(Map<String, ColumnDefinition> columnMap) {
-        if (!distribution.isExplicit() && !distribution.isHash()) {
-            return;
-        }
         // Validate the user-visible distribution before IVM rewrites it to row-id,
         // so invalid HASH columns and explicit RANDOM keep ordinary UNIQUE table semantics.
         distribution.validate(columnMap, KeysType.UNIQUE_KEYS);
     }
 
     private DistributionDescriptor buildIvmRowIdDistribution(DistributionDescriptor sourceDistribution) {
-        int bucketNum = sourceDistribution.translateToCatalogStyle().getBuckets();
-        return new DistributionDescriptor(true, sourceDistribution.isAutoBucket(), bucketNum,
-                Lists.newArrayList(Column.IVM_ROW_ID_COL), sourceDistribution.isExplicit());
+        boolean isAutoBucket = sourceDistribution != null && sourceDistribution.isAutoBucket();
+        int bucketNum = sourceDistribution == null ? FeConstants.default_bucket_num
+                : sourceDistribution.translateToCatalogStyle().getBuckets();
+        return new DistributionDescriptor(true, isAutoBucket, bucketNum,
+                Lists.newArrayList(Column.IVM_ROW_ID_COL));
     }
 
     private void analyzeAutoRefreshQuery(ConnectContext ctx) throws UserException {

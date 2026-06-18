@@ -1640,17 +1640,15 @@ public class LogicalPlanBuilder extends DorisParserBaseVisitor<Object> {
         if (ctx.INTEGER_VALUE() != null) {
             bucketNum = Integer.parseInt(ctx.INTEGER_VALUE().getText());
         }
-        DistributionDescriptor desc;
-        boolean explicitDistribution = ctx.HASH() != null || ctx.RANDOM() != null
-                || ctx.BUCKETS() != null || ctx.AUTO() != null;
+        DistributionDescriptor desc = null;
         // For IVM MTMVs, this descriptor records the user-visible distribution
         // only. CreateMTMVInfo validates it before rewriting the physical
         // distribution to HASH(__DORIS_IVM_ROW_ID_COL__).
         if (ctx.HASH() != null) {
             desc = new DistributionDescriptor(true, ctx.AUTO() != null, bucketNum,
-                    visitIdentifierList(ctx.hashKeys), explicitDistribution);
-        } else {
-            desc = new DistributionDescriptor(false, ctx.AUTO() != null, bucketNum, null, explicitDistribution);
+                    visitIdentifierList(ctx.hashKeys));
+        } else if (ctx.RANDOM() != null || ctx.BUCKETS() != null || ctx.AUTO() != null) {
+            desc = new DistributionDescriptor(false, ctx.AUTO() != null, bucketNum, null);
         }
 
         Map<String, String> properties = ctx.propertyClause() != null
