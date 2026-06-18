@@ -34,7 +34,8 @@ import java.util.stream.Collectors;
  * SHOW CREATE should output a logical DDL that can be re-executed by users,
  * hiding all internal physical details:
  *   - No UNIQUE KEY(...) clause
- *   - No hidden IVM columns in the column list (the row-id may appear in DISTRIBUTED BY)
+ *   - No hidden IVM columns anywhere in the DDL
+ *   - No physical IVM DISTRIBUTED BY clause
  *   - No enable_unique_key_merge_on_write property
  *   - REFRESH INCREMENTAL must appear correctly
  */
@@ -83,10 +84,10 @@ public class ShowCreateMTMVTest extends SqlTestBase {
         MTMV mtmv = (MTMV) db.getTableOrAnalysisException("mv_show_ivm_no_rowid");
         String ddl = Env.getMTMVDdl(mtmv);
 
-        Assertions.assertFalse(ddl.substring(0, ddl.indexOf("\nBUILD ")).contains("__DORIS_IVM_"),
-                "IVM SHOW CREATE column list should not contain any __DORIS_IVM_ columns, but got:\n" + ddl);
-        Assertions.assertTrue(ddl.contains("DISTRIBUTED BY HASH(`__DORIS_IVM_ROW_ID_COL__`)"),
-                "IVM SHOW CREATE should include the row-id physical distribution, but got:\n" + ddl);
+        Assertions.assertFalse(ddl.contains("__DORIS_IVM_"),
+                "IVM SHOW CREATE should not contain any __DORIS_IVM_ columns, but got:\n" + ddl);
+        Assertions.assertFalse(ddl.contains("DISTRIBUTED BY"),
+                "IVM SHOW CREATE should omit physical distribution, but got:\n" + ddl);
     }
 
     // TC-4-3: INCREMENTAL MV SHOW CREATE must contain REFRESH INCREMENTAL
@@ -138,15 +139,15 @@ public class ShowCreateMTMVTest extends SqlTestBase {
         MTMV mtmv = (MTMV) db.getTableOrAnalysisException("mv_show_ivm_replay");
         String ddl = Env.getMTMVDdl(mtmv);
 
-        // The DDL should not contain physical details that would cause re-execution to fail
+        // The DDL should not contain physical details that would cause re-execution to fail.
         Assertions.assertFalse(ddl.contains("UNIQUE KEY"),
                 "Replayable DDL must not contain UNIQUE KEY:\n" + ddl);
         Assertions.assertFalse(ddl.contains("enable_unique_key_merge_on_write"),
                 "Replayable DDL must not contain MOW property:\n" + ddl);
-        Assertions.assertFalse(ddl.substring(0, ddl.indexOf("\nBUILD ")).contains("__DORIS_IVM_"),
-                "Replayable DDL column list must not contain IVM hidden columns:\n" + ddl);
-        Assertions.assertTrue(ddl.contains("DISTRIBUTED BY HASH(`__DORIS_IVM_ROW_ID_COL__`)"),
-                "Replayable DDL must contain row-id physical distribution:\n" + ddl);
+        Assertions.assertFalse(ddl.contains("__DORIS_IVM_"),
+                "Replayable DDL must not contain IVM hidden columns:\n" + ddl);
+        Assertions.assertFalse(ddl.contains("DISTRIBUTED BY"),
+                "Replayable DDL must omit IVM physical distribution:\n" + ddl);
         Assertions.assertTrue(ddl.contains("REFRESH INCREMENTAL"),
                 "Replayable DDL must contain REFRESH INCREMENTAL:\n" + ddl);
     }
@@ -169,8 +170,8 @@ public class ShowCreateMTMVTest extends SqlTestBase {
             connectContext.getSessionVariable().setShowHiddenColumns(true);
             String ddl = Env.getMTMVDdl(mtmv);
 
-            Assertions.assertFalse(ddl.substring(0, ddl.indexOf("\nBUILD ")).contains("__DORIS_IVM_"),
-                    "Even with show_hidden_columns=true, IVM column list should be hidden:\n" + ddl);
+            Assertions.assertFalse(ddl.contains("__DORIS_IVM_"),
+                    "Even with show_hidden_columns=true, IVM hidden columns should not be exposed:\n" + ddl);
             Assertions.assertFalse(ddl.contains("UNIQUE KEY"),
                     "Even with show_hidden_columns=true, UNIQUE KEY should be hidden:\n" + ddl);
         } finally {
@@ -205,10 +206,10 @@ public class ShowCreateMTMVTest extends SqlTestBase {
         }
     }
 
-    // TC-4-8: SHOW CREATE roundtrip — re-create IVM MV from DDL and verify identical output
+    // TC-4-8: SHOW CREATE roundtrip - re-create IVM MV from DDL and verify identical output
     @Test
     public void testShowCreateIvmRoundtrip() throws Exception {
-        // Step 1: create an IVM MV with a specific bucket count
+        // Step 1: create an IVM MV with an explicit user distribution.
         createMvByNereids("create materialized view mv_show_ivm_roundtrip_1 "
                 + "BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
                 + "KEY(id)\n"
@@ -220,23 +221,22 @@ public class ShowCreateMTMVTest extends SqlTestBase {
         MTMV mtmv1 = (MTMV) db.getTableOrAnalysisException("mv_show_ivm_roundtrip_1");
         String ddl1 = Env.getMTMVDdl(mtmv1);
 
-        // Step 2: verify DDL contains the physical row-id distribution with BUCKETS 3
-        Assertions.assertTrue(ddl1.contains("DISTRIBUTED BY HASH(`__DORIS_IVM_ROW_ID_COL__`) BUCKETS 3"),
-                "DDL should contain row-id hash distribution with 3 buckets, but got:\n" + ddl1);
+        // Step 2: verify DDL omits physical IVM distribution. The internal row-id
+        // distribution cannot be replayed because row-id is hidden from user DDL,
+        // and RANDOM is an invalid explicit distribution for IVM UNIQUE tables.
+        Assertions.assertFalse(ddl1.contains("__DORIS_IVM_"),
+                "DDL should not expose IVM hidden columns, but got:\n" + ddl1);
+        Assertions.assertFalse(ddl1.contains("DISTRIBUTED BY"),
+                "DDL should omit IVM physical distribution, but got:\n" + ddl1);
 
-        // Step 3: use DDL to create a second MV (replace the name)
+        // Step 3: use DDL to create a second MV (replace the name).
         String ddl2Sql = ddl1.replace("mv_show_ivm_roundtrip_1", "mv_show_ivm_roundtrip_2");
         createMvByNereids(ddl2Sql);
 
         MTMV mtmv2 = (MTMV) db.getTableOrAnalysisException("mv_show_ivm_roundtrip_2");
         String ddl2 = Env.getMTMVDdl(mtmv2);
 
-        // Step 4: verify bucket count is preserved — both have 3 buckets internally
-        Assertions.assertEquals(mtmv1.getDefaultDistributionInfo().getBucketNum(),
-                mtmv2.getDefaultDistributionInfo().getBucketNum(),
-                "Bucket count should be preserved after roundtrip");
-
-        // Step 5: verify structural part of SHOW CREATE is identical (everything before "AS select")
+        // Step 4: verify structural part of SHOW CREATE is identical (everything before "AS select").
         // The query SQL may differ slightly (e.g. "select *" expands to explicit columns with aliases),
         // but the structure (columns, refresh, distribution, properties) must match exactly.
         String struct1 = ddl1.substring(0, ddl1.indexOf("\nAS "))
@@ -247,7 +247,7 @@ public class ShowCreateMTMVTest extends SqlTestBase {
                 "Structural part of SHOW CREATE should match after roundtrip.\n"
                 + "DDL1:\n" + ddl1 + "\nDDL2:\n" + ddl2);
 
-        // Step 6: second roundtrip should be a true fixpoint (DDL from MV2 reproduces itself)
+        // Step 5: second roundtrip should be a true fixpoint (DDL from MV2 reproduces itself).
         String ddl3Sql = ddl2.replace("mv_show_ivm_roundtrip_2", "mv_show_ivm_roundtrip_3");
         createMvByNereids(ddl3Sql);
         MTMV mtmv3 = (MTMV) db.getTableOrAnalysisException("mv_show_ivm_roundtrip_3");
@@ -258,7 +258,7 @@ public class ShowCreateMTMVTest extends SqlTestBase {
                 "Second roundtrip should be a perfect fixpoint.\n"
                 + "DDL2:\n" + ddl2 + "\nDDL3:\n" + ddl3);
 
-        // Step 7: verify schema columns match (excluding hidden IVM columns)
+        // Step 6: verify schema columns match (excluding hidden IVM columns).
         List<String> cols1 = mtmv1.getBaseSchema().stream()
                 .map(Column::getName)
                 .filter(n -> !IvmUtil.isIvmHiddenColumn(n))
@@ -270,7 +270,7 @@ public class ShowCreateMTMVTest extends SqlTestBase {
         Assertions.assertEquals(cols1, cols2,
                 "Visible schema columns should match after roundtrip");
 
-        // Step 8: all should have HASH distribution internally (IVM rewrites to HASH(row_id))
+        // Step 7: all should have HASH distribution internally (IVM rewrites to HASH(row-id)).
         Assertions.assertEquals(DistributionInfo.DistributionInfoType.HASH,
                 mtmv1.getDefaultDistributionInfo().getType(),
                 "MV1 internal distribution should be HASH");
