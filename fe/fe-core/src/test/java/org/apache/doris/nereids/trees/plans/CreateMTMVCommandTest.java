@@ -805,6 +805,25 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     }
 
     @Test
+    public void testIvmMvRejectsHashDistributionWithoutUserKeyBeforeRewrite() throws Exception {
+        createTable("create table test.ivm_dist_hash_no_key_base (k1 int, v1 int)\n"
+                + "duplicate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
+
+        AnalysisException ex = Assertions.assertThrows(AnalysisException.class, () -> getPartitionTableInfo(
+                "CREATE MATERIALIZED VIEW ivm_dist_hash_no_key_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " DISTRIBUTED BY HASH(k1) BUCKETS 4\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS\n"
+                + " SELECT k1, v1 FROM ivm_dist_hash_no_key_base;"));
+
+        Assertions.assertTrue(ex.getMessage().contains("Distribution column[k1] is not key column"),
+                "unexpected message: " + ex.getMessage());
+    }
+
+    @Test
     public void testIvmMvRejectsInvalidHashDistributionColumnBeforeRewrite() throws Exception {
         createTable("create table test.ivm_dist_invalid_hash_base (k1 int, v1 int)\n"
                 + "duplicate key(k1)\n"
@@ -904,6 +923,28 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         Assertions.assertEquals(Column.IVM_ROW_ID_COL, info.getDistribution().getCols().get(0));
         // Bucket count should be preserved from the user's specification
         Assertions.assertEquals(7, info.getDistribution().translateToCatalogStyle().getBuckets());
+    }
+
+    @Test
+    public void testIvmMvAutoBucketPreservedAfterRowIdDistributionRewrite() throws Exception {
+        createTable("create table test.ivm_dist_auto_bucket_base (k1 int, v1 int)\n"
+                + "duplicate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
+
+        CreateMTMVInfo info = getPartitionTableInfo(
+                "CREATE MATERIALIZED VIEW ivm_dist_auto_bucket_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " KEY(k1)\n"
+                + " DISTRIBUTED BY HASH(k1) BUCKETS AUTO\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS\n"
+                + " SELECT k1, v1 FROM ivm_dist_auto_bucket_base;");
+
+        Assertions.assertTrue(info.getDistribution().isHash());
+        Assertions.assertTrue(info.getDistribution().isAutoBucket());
+        Assertions.assertEquals(Column.IVM_ROW_ID_COL, info.getDistribution().getCols().get(0));
+        Assertions.assertEquals("true", info.getProperties().get(PropertyAnalyzer.PROPERTIES_AUTO_BUCKET));
     }
 
     @Test
