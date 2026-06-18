@@ -740,20 +740,26 @@ public class MTMVPlanUtil {
         // It must not enlarge the final MOW key because row-id is the stable dedup identity.
         finalKeys.add(Column.IVM_ROW_ID_COL);
 
+        Set<String> finalKeySet = Sets.newTreeSet(String.CASE_INSENSITIVE_ORDER);
+        finalKeySet.addAll(finalKeys);
+
+        // Doris key columns must be a schema prefix. Move final IVM keys to the
+        // front and mark key/value columns while building the reordered schema.
         List<ColumnDefinition> reorderedColumns = new ArrayList<>(columns.size());
         for (String key : finalKeys) {
-            reorderedColumns.add(columnMap.get(key));
+            ColumnDefinition keyColumn = columnMap.get(key);
+            keyColumn.setIsKey(true);
+            reorderedColumns.add(keyColumn);
         }
         for (ColumnDefinition column : columns) {
-            if (!containsIgnoreCase(finalKeys, column.getName())) {
-                reorderedColumns.add(column);
+            if (finalKeySet.contains(column.getName())) {
+                continue;
             }
+            column.setIsKey(false);
+            reorderedColumns.add(column);
         }
         columns.clear();
         columns.addAll(reorderedColumns);
-        for (int i = 0; i < columns.size(); i++) {
-            columns.get(i).setIsKey(i < finalKeys.size());
-        }
         return Lists.newArrayList(finalKeys);
     }
 
