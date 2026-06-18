@@ -16,6 +16,9 @@
 // under the License.
 
 suite("test_ivm_partition_unique_key") {
+    // This suite verifies that partitioned IVM MVs keep ordinary UNIQUE/MOW
+    // layout rules before IVM appends the hidden row-id key and rewrites the
+    // physical distribution to HASH(__DORIS_IVM_ROW_ID_COL__).
     sql """drop materialized view if exists mv_ivm_partition_key;"""
     sql """drop materialized view if exists mv_ivm_partition_auto_key;"""
     sql """drop materialized view if exists mv_ivm_partition_bad_key;"""
@@ -51,6 +54,8 @@ suite("test_ivm_partition_unique_key") {
             (3, '2026-06-02', 30);
     """
 
+    // A valid explicit-key case: the MV partition column dt is part of the
+    // user key, and the user HASH distribution column id is also a key column.
     sql """
         CREATE MATERIALIZED VIEW mv_ivm_partition_key
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
@@ -75,6 +80,8 @@ suite("test_ivm_partition_unique_key") {
     waitingMTMVTaskFinishedByMvName("mv_ivm_partition_key")
     order_qt_partition_key_incremental """SELECT dt, id, v FROM mv_ivm_partition_key"""
 
+    // A valid system-key case: no user key/distribution is specified, so IVM
+    // generates the required UNIQUE key from the partition layout plus row-id.
     sql """
         CREATE MATERIALIZED VIEW mv_ivm_partition_auto_key
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
@@ -92,6 +99,8 @@ suite("test_ivm_partition_unique_key") {
     waitingMTMVTaskFinishedByMvName("mv_ivm_partition_auto_key")
     order_qt_auto_key_complete """SELECT dt, id, v FROM mv_ivm_partition_auto_key"""
 
+    // Invalid: a partitioned UNIQUE/MOW table requires the partition column to
+    // be a key column before IVM appends the hidden row-id key.
     test {
         sql """
             CREATE MATERIALIZED VIEW mv_ivm_partition_bad_key
@@ -107,6 +116,8 @@ suite("test_ivm_partition_unique_key") {
         exception "partition column must be key column"
     }
 
+    // Invalid: the user-visible HASH distribution is validated before IVM
+    // rewrites distribution to row-id, so its column must already be a key.
     test {
         sql """
             CREATE MATERIALIZED VIEW mv_ivm_partition_bad_dist
@@ -121,6 +132,8 @@ suite("test_ivm_partition_unique_key") {
         exception "distribution column must be key column"
     }
 
+    // Invalid: aggregate IVM MVs with explicit keys must include every GROUP BY
+    // output column because the MV row identity is the full aggregate group.
     test {
         sql """
             CREATE MATERIALIZED VIEW mv_ivm_partition_bad_agg_key
@@ -135,6 +148,8 @@ suite("test_ivm_partition_unique_key") {
         exception "group key column"
     }
 
+    // Invalid: aggregate result values are mutable state, so they cannot be
+    // part of the stable UNIQUE key used by IVM/MOW deduplication.
     test {
         sql """
             CREATE MATERIALIZED VIEW mv_ivm_partition_bad_agg_value_key
