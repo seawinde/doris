@@ -45,7 +45,6 @@ suite("test_ivm_plan_signature_fallback", "nonConcurrent") {
     sql """
         CREATE MATERIALIZED VIEW ${mvName}
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES (
             "replication_num" = "1"
         )

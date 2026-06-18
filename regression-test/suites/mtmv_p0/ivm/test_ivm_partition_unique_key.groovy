@@ -79,7 +79,6 @@ suite("test_ivm_partition_unique_key") {
         CREATE MATERIALIZED VIEW mv_ivm_partition_auto_key
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
         PARTITION BY(dt)
-        DISTRIBUTED BY HASH(id) BUCKETS 2
         PROPERTIES (
             'replication_num' = '1'
         )

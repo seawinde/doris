@@ -92,7 +92,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         String mv = "CREATE MATERIALIZED VIEW mtmv5\n"
                 + " BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT * FROM aa1;";
@@ -122,7 +121,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         String mv = "CREATE MATERIALIZED VIEW mtmv1\n"
                 + " BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
                 + " partition by(`date`)\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT * FROM mm1;";
@@ -153,7 +151,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         String mv = "CREATE MATERIALIZED VIEW mtmv2\n"
                 + " BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
                 + " partition by(`date`)\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT * FROM te2;";
@@ -181,7 +178,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         String mv = "CREATE MATERIALIZED VIEW mtmv\n"
                 + "BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
                 + "partition by(`date`)\n"
-                + "DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + "PROPERTIES ('replication_num' = '1')\n"
                 + "AS\n"
                 + "SELECT * FROM cc1;";
@@ -287,7 +283,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     public void testMTMVRejectVarbinary() throws Exception {
         String mv = "CREATE MATERIALIZED VIEW mv_vb\n"
                 + " BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT X'AB' as vb;";
 
@@ -307,7 +302,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     public void testCreateMTMVWithIncrementRefreshMethod() throws Exception {
         String mv = "CREATE MATERIALIZED VIEW mtmv_increment\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT 1 AS k1;";
 
@@ -324,7 +318,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     public void testCreateMTMVWithIncrementalFallback() throws Exception {
         String mv = "CREATE MATERIALIZED VIEW mtmv_increment_fallback\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL FALLBACK ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT 1 AS k1;";
 
@@ -340,7 +333,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     public void testCreateMTMVWithCompleteFallbackRejected() {
         String mv = "CREATE MATERIALIZED VIEW mtmv_complete_fallback\n"
                 + " BUILD DEFERRED REFRESH COMPLETE FALLBACK ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT 1 AS k1;";
 
@@ -356,7 +348,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     public void testCreatePartitionsRefreshRequiresPartitionBy() {
         String mv = "CREATE MATERIALIZED VIEW mtmv_partitions_without_partition_by\n"
                 + " BUILD DEFERRED REFRESH PARTITIONS ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT 1 AS k1;";
 
@@ -375,7 +366,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
         createMtmv("CREATE MATERIALIZED VIEW mtmv_increment_flag\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT k1 FROM mtmv_increment_flag_base;");
 
@@ -392,7 +382,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
         createMtmv("CREATE MATERIALIZED VIEW mtmv_auto_increment_flag\n"
                 + " BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT k1 FROM mtmv_auto_increment_flag_base;");
 
@@ -410,7 +399,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         CreateMTMVInfo info = getPartitionTableInfo("CREATE MATERIALIZED VIEW mtmv_auto_fallback_agg\n"
                 + " BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT k1 FROM mtmv_auto_fallback_agg_base;");
 
@@ -426,7 +414,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         String sql = "CREATE MATERIALIZED VIEW mtmv_auto_fallback_plain\n"
                 + " BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT k1 FROM mtmv_auto_fallback_plain_base;";
         resetStatementContext(sql);
@@ -464,7 +451,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
                 () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW mtmv_auto_bad_sql\n"
                         + " BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
-                        + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS SELECT missing_col FROM missing_table;"));
 
@@ -482,7 +468,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         CreateMTMVInfo createMTMVInfo = getPartitionTableInfo("CREATE MATERIALIZED VIEW mtmv_scan_alias"
                 + " (mv_id, mv_score)\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT * FROM mtmv_scan_base;");
@@ -505,7 +490,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         CreateMTMVInfo createMTMVInfo = getPartitionTableInfo("CREATE MATERIALIZED VIEW mtmv_project_scan_alias"
                 + " (mv_inc_id, mv_score)\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT id + 1, score FROM mtmv_project_scan_base;");
@@ -527,7 +511,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         CreateMTMVInfo createMTMVInfo = getPartitionTableInfo("CREATE MATERIALIZED VIEW mtmv_no_cols"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT id, score FROM mtmv_no_cols_base;");
@@ -548,7 +531,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         CreateMTMVInfo createMTMVInfo = getPartitionTableInfo("CREATE MATERIALIZED VIEW mtmv_alias"
                 + " (mv_id, mv_score)\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT id, score FROM mtmv_alias_base;");
@@ -573,7 +555,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW mtmv_col_mismatch"
                         + " (mv_id, mv_score)\n"
                         + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                        + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS\n"
                         + " SELECT id FROM mtmv_col_mismatch_base;"));
@@ -610,7 +591,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         CreateMTMVInfo info = getPartitionTableInfo(
                 "CREATE MATERIALIZED VIEW agg_multi_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT k1, COUNT(*), SUM(v1) FROM agg_multi_base GROUP BY k1;");
@@ -655,7 +635,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         createMtmv("create materialized view mtmv_ivm_properties\n"
                 + "BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + "DISTRIBUTED BY RANDOM BUCKETS 1\n"
                 + "PROPERTIES ('replication_num' = '1')\n"
                 + "AS select * from test.mtmv_ivm_properties_base;");
 
@@ -679,7 +658,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 () -> getPartitionTableInfo(
                         "CREATE MATERIALIZED VIEW agg_having_mv\n"
                         + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                        + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS\n"
                         + " SELECT k1, SUM(v1) FROM agg_having_base GROUP BY k1"
@@ -699,7 +677,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         CreateMTMVInfo info = getPartitionTableInfo(
                 "CREATE MATERIALIZED VIEW scalar_agg_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT COUNT(*), SUM(v1) FROM scalar_agg_base;");
@@ -740,7 +717,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         CreateMTMVInfo info = getPartitionTableInfo(
                 "CREATE MATERIALIZED VIEW agg_avg_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT k1, AVG(v1) FROM agg_avg_base GROUP BY k1;");
@@ -767,25 +743,41 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     }
 
     @Test
-    public void testIvmMvRandomDistributionForcedToHashOnRowId() throws Exception {
-        // IVM MV with RANDOM distribution should be overridden to HASH(__DORIS_IVM_ROW_ID_COL__)
+    public void testIvmMvRejectsExplicitRandomDistribution() throws Exception {
         createTable("create table test.ivm_dist_random_base (k1 int, v1 int)\n"
                 + "duplicate key(k1)\n"
                 + "distributed by hash(k1) buckets 1\n"
                 + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
 
-        CreateMTMVInfo info = getPartitionTableInfo(
+        AnalysisException ex = Assertions.assertThrows(AnalysisException.class, () -> getPartitionTableInfo(
                 "CREATE MATERIALIZED VIEW ivm_dist_random_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
                 + " DISTRIBUTED BY RANDOM BUCKETS 3\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
-                + " SELECT k1, v1 FROM ivm_dist_random_base;");
+                + " SELECT k1, v1 FROM ivm_dist_random_base;"));
 
-        // Distribution should be forced to HASH
+        Assertions.assertTrue(ex.getMessage().contains("Create unique keys table should not contain random"),
+                "unexpected message: " + ex.getMessage());
+    }
+
+    @Test
+    public void testIvmMvDefaultDistributionForcedToHashOnRowId() throws Exception {
+        createTable("create table test.ivm_dist_default_base (k1 int, v1 int)\n"
+                + "duplicate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
+
+        CreateMTMVInfo info = getPartitionTableInfo(
+                "CREATE MATERIALIZED VIEW ivm_dist_default_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS\n"
+                + " SELECT k1, v1 FROM ivm_dist_default_base;");
+
+        // IVM MOW dedup is tablet-local, so omitted distribution becomes HASH(row-id).
         Assertions.assertTrue(info.getDistribution().isHash(),
-                "IVM MV distribution should be HASH, not RANDOM");
-        // Distribution column should be __DORIS_IVM_ROW_ID_COL__
+                "IVM MV distribution should be HASH");
         Assertions.assertEquals(1, info.getDistribution().getCols().size());
         Assertions.assertEquals(Column.IVM_ROW_ID_COL, info.getDistribution().getCols().get(0));
     }
@@ -801,6 +793,7 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         CreateMTMVInfo info = getPartitionTableInfo(
                 "CREATE MATERIALIZED VIEW ivm_dist_hash_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " KEY(k1)\n"
                 + " DISTRIBUTED BY HASH(k1) BUCKETS 4\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
@@ -809,6 +802,45 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         Assertions.assertTrue(info.getDistribution().isHash());
         Assertions.assertEquals(1, info.getDistribution().getCols().size());
         Assertions.assertEquals(Column.IVM_ROW_ID_COL, info.getDistribution().getCols().get(0));
+    }
+
+    @Test
+    public void testIvmMvRejectsInvalidHashDistributionColumnBeforeRewrite() throws Exception {
+        createTable("create table test.ivm_dist_invalid_hash_base (k1 int, v1 int)\n"
+                + "duplicate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
+
+        AnalysisException ex = Assertions.assertThrows(AnalysisException.class, () -> getPartitionTableInfo(
+                "CREATE MATERIALIZED VIEW ivm_dist_invalid_hash_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " DISTRIBUTED BY HASH(no_such_col) BUCKETS 8\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS\n"
+                + " SELECT k1, v1 FROM ivm_dist_invalid_hash_base;"));
+
+        Assertions.assertTrue(ex.getMessage().contains("Distribution column(no_such_col) doesn't exist"),
+                "unexpected message: " + ex.getMessage());
+    }
+
+    @Test
+    public void testIvmMvRejectsHashDistributionNonKeyColumnBeforeRewrite() throws Exception {
+        createTable("create table test.ivm_dist_non_key_hash_base (k1 int, v1 int)\n"
+                + "duplicate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
+
+        AnalysisException ex = Assertions.assertThrows(AnalysisException.class, () -> getPartitionTableInfo(
+                "CREATE MATERIALIZED VIEW ivm_dist_non_key_hash_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " KEY(k1)\n"
+                + " DISTRIBUTED BY HASH(v1) BUCKETS 8\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS\n"
+                + " SELECT k1, v1 FROM ivm_dist_non_key_hash_base;"));
+
+        Assertions.assertTrue(ex.getMessage().contains("Distribution column[v1] is not key column"),
+                "unexpected message: " + ex.getMessage());
     }
 
     @Test
@@ -845,7 +877,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 "CREATE MATERIALIZED VIEW auto_key_mv\n"
                 + " BUILD DEFERRED REFRESH AUTO ON MANUAL\n"
                 + " KEY(k1)\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT k1, v1 FROM auto_key_base;");
 
@@ -863,7 +894,8 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         CreateMTMVInfo info = getPartitionTableInfo(
                 "CREATE MATERIALIZED VIEW ivm_dist_bucket_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 7\n"
+                + " KEY(k1)\n"
+                + " DISTRIBUTED BY HASH(k1) BUCKETS 7\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT k1, v1 FROM ivm_dist_bucket_base;");
@@ -885,7 +917,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         CreateMTMVInfo info = getPartitionTableInfo(
                 "CREATE MATERIALIZED VIEW agg_minmax_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS\n"
                 + " SELECT k1, MIN(v1), MAX(v2) FROM agg_minmax_base GROUP BY k1;");
@@ -906,7 +937,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
         createMtmv("CREATE MATERIALIZED VIEW ivm_dup_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT k1, v1 FROM ivm_dup_base;");
         MTMV mtmv = getMtmv("ivm_dup_mv");
@@ -922,7 +952,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "'enable_unique_key_merge_on_write' = 'true');");
         createMtmv("CREATE MATERIALIZED VIEW ivm_mow_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT k1, v1 FROM ivm_mow_base;");
         MTMV mtmv = getMtmv("ivm_mow_mv");
@@ -930,37 +959,39 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     }
 
     @Test
-    public void testCreateIncrementalMVRejectsUserSpecifiedKeyColumns() throws Exception {
+    public void testCreateIncrementalMVAcceptsUserSpecifiedKeyColumns() throws Exception {
         createTable("create table test.ivm_explicit_key_base (k1 int, v1 int)\n"
                 + "duplicate key(k1)\n"
                 + "distributed by hash(k1) buckets 1\n"
                 + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
-        AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
-                () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_explicit_unique_key_mv\n"
-                        + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                        + " KEY(k1)\n"
-                        + " DISTRIBUTED BY HASH(k1) BUCKETS 1\n"
-                        + " PROPERTIES ('replication_num' = '1')\n"
-                        + " AS SELECT k1, v1 FROM ivm_explicit_key_base;"));
-        Assertions.assertTrue(ex.getMessage().contains("does not allow specifying key columns"),
-                "unexpected message: " + ex.getMessage());
+        CreateMTMVInfo info = getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_explicit_unique_key_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " KEY(k1)\n"
+                + " DISTRIBUTED BY HASH(k1) BUCKETS 1\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS SELECT k1, v1 FROM ivm_explicit_key_base;");
+
+        Assertions.assertTrue(info.isEnableIvm());
+        Assertions.assertTrue(info.getDistribution().isHash());
+        Assertions.assertEquals(Column.IVM_ROW_ID_COL, info.getDistribution().getCols().get(0));
     }
 
     @Test
-    public void testCreateIncrementalMVRejectsUserSpecifiedDuplicateKey() throws Exception {
+    public void testCreateIncrementalMVAcceptsUserSpecifiedDuplicateKeyColumns() throws Exception {
         createTable("create table test.ivm_explicit_dup_base (k1 int, v1 int)\n"
                 + "duplicate key(k1)\n"
                 + "distributed by hash(k1) buckets 1\n"
                 + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
-        AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
-                () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_explicit_dup_key_mv\n"
-                        + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                        + " DUPLICATE KEY(k1)\n"
-                        + " DISTRIBUTED BY HASH(k1) BUCKETS 1\n"
-                        + " PROPERTIES ('replication_num' = '1')\n"
-                        + " AS SELECT k1, v1 FROM ivm_explicit_dup_base;"));
-        Assertions.assertTrue(ex.getMessage().contains("does not allow specifying key columns"),
-                "unexpected message: " + ex.getMessage());
+        CreateMTMVInfo info = getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_explicit_dup_key_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " DUPLICATE KEY(k1)\n"
+                + " DISTRIBUTED BY HASH(k1) BUCKETS 1\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS SELECT k1, v1 FROM ivm_explicit_dup_base;");
+
+        Assertions.assertTrue(info.isEnableIvm());
+        Assertions.assertTrue(info.getDistribution().isHash());
+        Assertions.assertEquals(Column.IVM_ROW_ID_COL, info.getDistribution().getCols().get(0));
     }
 
     @Test
@@ -972,7 +1003,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
                 () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_agg_mv\n"
                         + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                        + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS SELECT k1 FROM ivm_agg_base;"));
         Assertions.assertTrue(ex.getMessage().contains("requires base tables to be"),
@@ -987,7 +1017,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "properties('replication_num' = '1');");
         createMtmv("CREATE MATERIALIZED VIEW ivm_excluded_agg_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1', 'excluded_trigger_tables' = 'ivm_excluded_agg_base')\n"
                 + " AS SELECT k1 FROM ivm_excluded_agg_base;");
         MTMV mtmv = getMtmv("ivm_excluded_agg_mv");
@@ -1004,7 +1033,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
                 () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_nomow_mv\n"
                         + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                        + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS SELECT k1, v1 FROM ivm_nomow_base;"));
         Assertions.assertTrue(ex.getMessage().contains("enable Merge-On-Write"),
@@ -1019,7 +1047,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
         createMtmv("CREATE MATERIALIZED VIEW ivm_deferred_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT k1 FROM ivm_deferred_base;");
         MTMV mtmv = getMtmv("ivm_deferred_mv");
@@ -1045,7 +1072,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         CreateMTMVInfo info = getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_partition_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
                 + " PARTITION BY(`dt`)\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT k1, dt, v1 FROM ivm_partition_base;");
 
@@ -1067,7 +1093,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 () -> getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_partition_unsupported_mv\n"
                         + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
                         + " PARTITION BY(`k1`)\n"
-                        + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS SELECT k1, v1 FROM ivm_partition_unsupported_base;"));
         Assertions.assertTrue(ex.getMessage().contains("suitable"),
@@ -1089,7 +1114,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         CreateMTMVInfo info = getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_outer_filter_mv\n"
                         + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                        + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS SELECT ivm_outer_filter_left.k1, ivm_outer_filter_left.v1,"
                         + " ivm_outer_filter_right.v2\n"
@@ -1110,7 +1134,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         assertCreateMtmvFails("CREATE MATERIALIZED VIEW ivm_loj_null_nested_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT ivm_loj_null_nested_l.k1, ivm_loj_null_nested_l.v1,"
                 + " ivm_loj_null_nested_r.v1 AS rv1, ivm_loj_null_nested_n.v1 AS nv1\n"
@@ -1133,7 +1156,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         assertCreateMtmvFails("CREATE MATERIALIZED VIEW ivm_foj_left_null_nested_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT ivm_foj_left_null_nested_l.k1, ivm_foj_left_null_nested_l.v1,"
                 + " ivm_foj_left_null_nested_r.v1 AS rv1, ivm_foj_left_null_nested_n.v1 AS nv1\n"
@@ -1146,7 +1168,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         assertCreateMtmvFails("CREATE MATERIALIZED VIEW ivm_foj_right_null_nested_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT ivm_foj_right_null_nested_l.k1, ivm_foj_right_null_nested_l.v1,"
                 + " ivm_foj_right_null_nested_r.v1 AS rv1, ivm_foj_right_null_nested_n.v1 AS nv1\n"
@@ -1164,7 +1185,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         createIvmMowTable("ivm_agg_inner_mow_r");
         createMtmv("CREATE MATERIALIZED VIEW ivm_agg_inner_join_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT ivm_agg_inner_dup_l.k1, COUNT(*) AS cnt, SUM(ivm_agg_inner_dup_l.v1) AS total\n"
                 + " FROM ivm_agg_inner_dup_l\n"
@@ -1179,7 +1199,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         createIvmMowTable("ivm_agg_left_mow_r");
         createMtmv("CREATE MATERIALIZED VIEW ivm_agg_left_join_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT ivm_agg_left_dup_l.k1, COUNT(ivm_agg_left_mow_r.v1) AS matched_cnt,"
                 + " SUM(ivm_agg_left_dup_l.v1) AS total\n"
@@ -1195,7 +1214,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         createIvmDupTable("ivm_agg_full_dup_r");
         createMtmv("CREATE MATERIALIZED VIEW ivm_agg_full_join_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT ivm_agg_full_dup_l.k1, COUNT(*) AS cnt, SUM(ivm_agg_full_dup_r.v1) AS total\n"
                 + " FROM ivm_agg_full_dup_l\n"
@@ -1216,7 +1234,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         assertCreateMtmvFails("CREATE MATERIALIZED VIEW ivm_loj_nondet_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT ivm_loj_nondet_l.k1, ivm_loj_nondet_l.v1, ivm_loj_nondet_r.v1 AS rv1\n"
                 + " FROM ivm_loj_nondet_l\n"
@@ -1225,7 +1242,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
         assertCreateMtmvFails("CREATE MATERIALIZED VIEW ivm_foj_nondet_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1')\n"
                 + " AS SELECT ivm_foj_nondet_l.k1, ivm_foj_nondet_l.v1, ivm_foj_nondet_r.v1 AS rv1\n"
                 + " FROM ivm_foj_nondet_l\n"
@@ -1243,7 +1259,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "properties('replication_num' = '1');");
         createMtmv("CREATE MATERIALIZED VIEW ivm_alter_excluded_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1', 'excluded_trigger_tables' = 'ivm_alter_agg_base')\n"
                 + " AS SELECT k1 FROM ivm_alter_agg_base;");
         MTMV mtmv = getMtmv("ivm_alter_excluded_mv");
@@ -1265,7 +1280,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "properties('replication_num' = '1');");
         createMtmv("CREATE MATERIALIZED VIEW ivm_expand_excluded_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1', 'excluded_trigger_tables' = 'test.ivm_expand_agg_base')\n"
                 + " AS SELECT k1 FROM ivm_expand_agg_base;");
         MTMV mtmv = getMtmv("ivm_expand_excluded_mv");
@@ -1286,7 +1300,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "properties('replication_num' = '1');");
         createMtmv("CREATE MATERIALIZED VIEW ivm_narrow_excluded_mv\n"
                 + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                 + " PROPERTIES ('replication_num' = '1', 'excluded_trigger_tables' = 'ivm_narrow_agg_base')\n"
                 + " AS SELECT k1 FROM ivm_narrow_agg_base;");
         MTMV mtmv = getMtmv("ivm_narrow_excluded_mv");
@@ -1308,7 +1321,6 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         AnalysisException ex = Assertions.assertThrows(AnalysisException.class,
                 () -> createMtmv("CREATE MATERIALIZED VIEW ivm_win_mv\n"
                         + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                        + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
                         + " PROPERTIES ('replication_num' = '1')\n"
                         + " AS SELECT k1, row_number() OVER (ORDER BY k1) rn FROM ivm_win_base;"));
         Assertions.assertTrue(ex.getMessage().contains("IVM does not support window functions"),

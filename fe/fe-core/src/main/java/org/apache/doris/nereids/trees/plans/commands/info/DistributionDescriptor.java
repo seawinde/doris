@@ -40,12 +40,19 @@ import java.util.Set;
 public class DistributionDescriptor {
     private final boolean isHash;
     private final boolean isAutoBucket;
+    private final boolean isExplicit;
     private int bucketNum;
     private List<String> cols;
 
     public DistributionDescriptor(boolean isHash, boolean isAutoBucket, int bucketNum, List<String> cols) {
+        this(isHash, isAutoBucket, bucketNum, cols, true);
+    }
+
+    public DistributionDescriptor(boolean isHash, boolean isAutoBucket, int bucketNum, List<String> cols,
+            boolean isExplicit) {
         this.isHash = isHash;
         this.isAutoBucket = isAutoBucket;
+        this.isExplicit = isExplicit;
         this.bucketNum = bucketNum;
         this.cols = cols;
     }
@@ -56,6 +63,10 @@ public class DistributionDescriptor {
 
     public boolean isAutoBucket() {
         return isAutoBucket;
+    }
+
+    public boolean isExplicit() {
+        return isExplicit;
     }
 
     public void updateCols(String col) {

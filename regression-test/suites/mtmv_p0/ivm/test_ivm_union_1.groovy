@@ -68,7 +68,6 @@ suite("test_ivm_union_1") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_union_1_basic_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT k1, v1 FROM test_ivm_union_1_basic_t1
@@ -162,7 +161,6 @@ suite("test_ivm_union_1") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_union_1_3way_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT k1, v1 FROM test_ivm_union_1_3way_t1
@@ -221,7 +219,6 @@ suite("test_ivm_union_1") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_union_1_self_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT k1, v1 FROM test_ivm_union_1_self_t
@@ -299,7 +296,6 @@ suite("test_ivm_union_1") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_union_1_filter_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT k1, v1 FROM test_ivm_union_1_filter_t1 WHERE v1 > 15
@@ -370,7 +366,6 @@ suite("test_ivm_union_1") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_union_1_expr_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT k1, v1 * 2 as doubled FROM test_ivm_union_1_expr_t1

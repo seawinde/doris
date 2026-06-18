@@ -50,7 +50,6 @@ suite("test_ivm_bitmap_agg_2") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_bitmap_agg_2_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT BITMAP_UNION(IF(keep_bitmap = 1, b, NULL)) AS bu,
@@ -171,7 +170,6 @@ suite("test_ivm_bitmap_agg_2") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_bitmap_agg_2_all_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT BITMAP_UNION(b) AS bu,

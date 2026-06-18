@@ -61,7 +61,6 @@ suite("test_ivm_agg_join_3") {
     sql """
         CREATE MATERIALIZED VIEW ivm_aj3_p11_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT ivm_aj3_p11_dim.category AS category,

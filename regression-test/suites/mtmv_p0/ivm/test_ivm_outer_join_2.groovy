@@ -78,7 +78,6 @@ suite("test_ivm_outer_join_2") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_outer_join_2_chain_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 1
         PROPERTIES (
             'replication_num' = '1'
         )
@@ -190,7 +189,6 @@ suite("test_ivm_outer_join_2") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_outer_join_2_inner_nested_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 1
         PROPERTIES (
             'replication_num' = '1'
         )
@@ -276,7 +274,6 @@ suite("test_ivm_outer_join_2") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_outer_join_2_filter_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 1
         PROPERTIES (
             'replication_num' = '1'
         )

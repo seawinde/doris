@@ -50,7 +50,6 @@ suite("test_ivm_bitmap_agg_1") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_bitmap_agg_1_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT k,

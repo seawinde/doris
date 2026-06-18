@@ -3855,12 +3855,12 @@ public class Env {
             DistributionInfo distributionInfo = mtmv.getDefaultDistributionInfo();
             if (isIvm) {
                 // IVM internally rewrites distribution to HASH(__DORIS_IVM_ROW_ID_COL__),
-                // which is a hidden column invisible to users.  Output DISTRIBUTED BY RANDOM
-                // with the same bucket count / auto-bucket setting, so the DDL is re-executable
-                // and preserves the bucket configuration.  On re-creation, the IVM pipeline
-                // will rewrite RANDOM to HASH(row_id) again automatically.
-                sb.append("\n").append(new RandomDistributionInfo(
-                        distributionInfo.getBucketNum(), distributionInfo.getAutoBucket()).toSql());
+                // which is a hidden column invisible to query results. The old RANDOM SHOW
+                // CREATE workaround is no longer valid because explicit RANDOM must fail
+                // ordinary UNIQUE table validation before IVM rewrites distribution.
+                // Emit the physical hash distribution so the DDL stays re-executable while
+                // preserving bucket settings.
+                sb.append("\n").append(distributionInfo.toSql());
             } else {
                 sb.append("\n").append(distributionInfo.toSql());
             }

@@ -60,7 +60,6 @@ suite("test_ivm_outer_join_3") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_outer_join_3_right_event_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 1
         PROPERTIES (
             'replication_num' = '1'
         )
@@ -143,7 +142,6 @@ suite("test_ivm_outer_join_3") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_outer_join_3_right_repair_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 1
         PROPERTIES (
             'replication_num' = '1'
         )

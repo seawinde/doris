@@ -728,20 +728,16 @@ public class MTMVPlanUtil {
                 validateIvmKeyColumn(columnMap, key);
                 finalKeys.add(columnMap.get(key).getName());
             }
-            validateIvmExplicitKeysCoverLayout(finalKeys, mvPartitionInfo, distribution);
+            validateIvmExplicitKeysCoverLayout(finalKeys, mvPartitionInfo);
             validateIvmExplicitKeysForAggregate(finalKeys, ivmNormalizeResult);
         } else {
             if (mvPartitionInfo != null && mvPartitionInfo.getPartitionType() != MTMVPartitionType.SELF_MANAGE) {
                 validateIvmKeyColumn(columnMap, mvPartitionInfo.getPartitionCol());
                 finalKeys.add(columnMap.get(mvPartitionInfo.getPartitionCol()).getName());
             }
-            if (distribution != null && !CollectionUtils.isEmpty(distribution.getCols())) {
-                for (String distributionColumn : distribution.getCols()) {
-                    validateIvmKeyColumn(columnMap, distributionColumn);
-                    finalKeys.add(columnMap.get(distributionColumn).getName());
-                }
-            }
         }
+        // User distribution is validated before CREATE rewrites the physical IVM distribution to row-id.
+        // It must not enlarge the final MOW key because row-id is the stable dedup identity.
         finalKeys.add(Column.IVM_ROW_ID_COL);
 
         List<ColumnDefinition> reorderedColumns = new ArrayList<>(columns.size());
@@ -782,20 +778,11 @@ public class MTMVPlanUtil {
         }
     }
 
-    private static void validateIvmExplicitKeysCoverLayout(Set<String> keySet, MTMVPartitionInfo mvPartitionInfo,
-            DistributionDescriptor distribution) {
+    private static void validateIvmExplicitKeysCoverLayout(Set<String> keySet, MTMVPartitionInfo mvPartitionInfo) {
         if (mvPartitionInfo != null && mvPartitionInfo.getPartitionType() != MTMVPartitionType.SELF_MANAGE
                 && !containsIgnoreCase(keySet, mvPartitionInfo.getPartitionCol())) {
             throw new AnalysisException("IVM materialized view partition column must be key column: "
                     + mvPartitionInfo.getPartitionCol());
-        }
-        if (distribution != null && !CollectionUtils.isEmpty(distribution.getCols())) {
-            for (String distributionColumn : distribution.getCols()) {
-                if (!containsIgnoreCase(keySet, distributionColumn)) {
-                    throw new AnalysisException("IVM materialized view distribution column must be key column: "
-                            + distributionColumn);
-                }
-            }
         }
     }
 

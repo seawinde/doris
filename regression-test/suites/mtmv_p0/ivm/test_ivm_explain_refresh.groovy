@@ -53,7 +53,6 @@ suite("test_ivm_explain_refresh") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_explain_refresh_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES (
             'replication_num' = '1'
         )

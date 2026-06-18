@@ -34,7 +34,7 @@ import java.util.stream.Collectors;
  * SHOW CREATE should output a logical DDL that can be re-executed by users,
  * hiding all internal physical details:
  *   - No UNIQUE KEY(...) clause
- *   - No hidden IVM columns (e.g., __DORIS_IVM_ROW_ID_COL__)
+ *   - No hidden IVM columns in the column list (the row-id may appear in DISTRIBUTED BY)
  *   - No enable_unique_key_merge_on_write property
  *   - REFRESH INCREMENTAL must appear correctly
  */
@@ -60,7 +60,6 @@ public class ShowCreateMTMVTest extends SqlTestBase {
     public void testShowCreateIncrementalMVNoUniqueKey() throws Exception {
         createMvByNereids("create materialized view mv_show_ivm_no_uk "
                 + "BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + "DISTRIBUTED BY RANDOM BUCKETS 1\n"
                 + "PROPERTIES ('replication_num' = '1')\n"
                 + "as select * from test.show_create_ivm_base;");
 
@@ -77,7 +76,6 @@ public class ShowCreateMTMVTest extends SqlTestBase {
     public void testShowCreateIncrementalMVNoRowIdColumn() throws Exception {
         createMvByNereids("create materialized view mv_show_ivm_no_rowid "
                 + "BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + "DISTRIBUTED BY RANDOM BUCKETS 1\n"
                 + "PROPERTIES ('replication_num' = '1')\n"
                 + "as select * from test.show_create_ivm_base;");
 
@@ -85,8 +83,10 @@ public class ShowCreateMTMVTest extends SqlTestBase {
         MTMV mtmv = (MTMV) db.getTableOrAnalysisException("mv_show_ivm_no_rowid");
         String ddl = Env.getMTMVDdl(mtmv);
 
-        Assertions.assertFalse(ddl.contains("__DORIS_IVM_"),
-                "IVM SHOW CREATE should not contain any __DORIS_IVM_ columns, but got:\n" + ddl);
+        Assertions.assertFalse(ddl.substring(0, ddl.indexOf("\nBUILD ")).contains("__DORIS_IVM_"),
+                "IVM SHOW CREATE column list should not contain any __DORIS_IVM_ columns, but got:\n" + ddl);
+        Assertions.assertTrue(ddl.contains("DISTRIBUTED BY HASH(`__DORIS_IVM_ROW_ID_COL__`)"),
+                "IVM SHOW CREATE should include the row-id physical distribution, but got:\n" + ddl);
     }
 
     // TC-4-3: INCREMENTAL MV SHOW CREATE must contain REFRESH INCREMENTAL
@@ -94,7 +94,6 @@ public class ShowCreateMTMVTest extends SqlTestBase {
     public void testShowCreateIncrementalMVContainsRefreshIncremental() throws Exception {
         createMvByNereids("create materialized view mv_show_ivm_refresh "
                 + "BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + "DISTRIBUTED BY RANDOM BUCKETS 1\n"
                 + "PROPERTIES ('replication_num' = '1')\n"
                 + "as select * from test.show_create_ivm_base;");
 
@@ -132,7 +131,6 @@ public class ShowCreateMTMVTest extends SqlTestBase {
     public void testShowCreateIncrementalMVIsReplayable() throws Exception {
         createMvByNereids("create materialized view mv_show_ivm_replay "
                 + "BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + "DISTRIBUTED BY RANDOM BUCKETS 1\n"
                 + "PROPERTIES ('replication_num' = '1')\n"
                 + "as select * from test.show_create_ivm_base;");
 
@@ -145,8 +143,10 @@ public class ShowCreateMTMVTest extends SqlTestBase {
                 "Replayable DDL must not contain UNIQUE KEY:\n" + ddl);
         Assertions.assertFalse(ddl.contains("enable_unique_key_merge_on_write"),
                 "Replayable DDL must not contain MOW property:\n" + ddl);
-        Assertions.assertFalse(ddl.contains("__DORIS_IVM_"),
-                "Replayable DDL must not contain IVM hidden columns:\n" + ddl);
+        Assertions.assertFalse(ddl.substring(0, ddl.indexOf("\nBUILD ")).contains("__DORIS_IVM_"),
+                "Replayable DDL column list must not contain IVM hidden columns:\n" + ddl);
+        Assertions.assertTrue(ddl.contains("DISTRIBUTED BY HASH(`__DORIS_IVM_ROW_ID_COL__`)"),
+                "Replayable DDL must contain row-id physical distribution:\n" + ddl);
         Assertions.assertTrue(ddl.contains("REFRESH INCREMENTAL"),
                 "Replayable DDL must contain REFRESH INCREMENTAL:\n" + ddl);
     }
@@ -156,7 +156,6 @@ public class ShowCreateMTMVTest extends SqlTestBase {
     public void testShowCreateIncrementalMVNoRowIdEvenWithShowHidden() throws Exception {
         createMvByNereids("create materialized view mv_show_ivm_hidden "
                 + "BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + "DISTRIBUTED BY RANDOM BUCKETS 1\n"
                 + "PROPERTIES ('replication_num' = '1')\n"
                 + "as select * from test.show_create_ivm_base;");
 
@@ -170,8 +169,8 @@ public class ShowCreateMTMVTest extends SqlTestBase {
             connectContext.getSessionVariable().setShowHiddenColumns(true);
             String ddl = Env.getMTMVDdl(mtmv);
 
-            Assertions.assertFalse(ddl.contains("__DORIS_IVM_"),
-                    "Even with show_hidden_columns=true, IVM columns should be hidden:\n" + ddl);
+            Assertions.assertFalse(ddl.substring(0, ddl.indexOf("\nBUILD ")).contains("__DORIS_IVM_"),
+                    "Even with show_hidden_columns=true, IVM column list should be hidden:\n" + ddl);
             Assertions.assertFalse(ddl.contains("UNIQUE KEY"),
                     "Even with show_hidden_columns=true, UNIQUE KEY should be hidden:\n" + ddl);
         } finally {
@@ -212,7 +211,8 @@ public class ShowCreateMTMVTest extends SqlTestBase {
         // Step 1: create an IVM MV with a specific bucket count
         createMvByNereids("create materialized view mv_show_ivm_roundtrip_1 "
                 + "BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
-                + "DISTRIBUTED BY RANDOM BUCKETS 3\n"
+                + "KEY(id)\n"
+                + "DISTRIBUTED BY HASH(id) BUCKETS 3\n"
                 + "PROPERTIES ('replication_num' = '1')\n"
                 + "as select * from test.show_create_ivm_base;");
 
@@ -220,9 +220,9 @@ public class ShowCreateMTMVTest extends SqlTestBase {
         MTMV mtmv1 = (MTMV) db.getTableOrAnalysisException("mv_show_ivm_roundtrip_1");
         String ddl1 = Env.getMTMVDdl(mtmv1);
 
-        // Step 2: verify DDL contains DISTRIBUTED BY RANDOM BUCKETS 3
-        Assertions.assertTrue(ddl1.contains("DISTRIBUTED BY RANDOM BUCKETS 3"),
-                "DDL should contain 'DISTRIBUTED BY RANDOM BUCKETS 3', but got:\n" + ddl1);
+        // Step 2: verify DDL contains the physical row-id distribution with BUCKETS 3
+        Assertions.assertTrue(ddl1.contains("DISTRIBUTED BY HASH(`__DORIS_IVM_ROW_ID_COL__`) BUCKETS 3"),
+                "DDL should contain row-id hash distribution with 3 buckets, but got:\n" + ddl1);
 
         // Step 3: use DDL to create a second MV (replace the name)
         String ddl2Sql = ddl1.replace("mv_show_ivm_roundtrip_1", "mv_show_ivm_roundtrip_2");

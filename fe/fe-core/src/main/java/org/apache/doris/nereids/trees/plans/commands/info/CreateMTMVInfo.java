@@ -175,22 +175,18 @@ public class CreateMTMVInfo extends CreateTableInfo {
             properties = Maps.newHashMap();
         }
 
-        if (isEnableIvm()) {
-            if (!distribution.isHash() || distribution.getCols() == null || distribution.getCols().isEmpty()) {
-                int bucketNum = distribution.translateToCatalogStyle().getBuckets();
-                distribution = new DistributionDescriptor(
-                        true, distribution.isAutoBucket(), bucketNum,
-                        Lists.newArrayList(Column.IVM_ROW_ID_COL));
-            }
-        }
-
-        CreateTableInfo.maybeRewriteByAutoBucket(distribution, properties);
-
         // analyze distribute
         Map<String, ColumnDefinition> columnMap = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         columns.forEach(c -> columnMap.put(c.getName(), c));
         distribution.updateCols(columns.get(0).getName());
         KeysType distributionKeysType = isEnableIvm() ? KeysType.UNIQUE_KEYS : KeysType.DUP_KEYS;
+        if (isEnableIvm()) {
+            validateUserDistributionForIvm(columnMap);
+            distribution = buildIvmRowIdDistribution(distribution);
+        }
+
+        properties = CreateTableInfo.maybeRewriteByAutoBucket(distribution, properties);
+        distribution.updateCols(columns.get(0).getName());
         distribution.validate(columnMap, distributionKeysType);
         refreshInfo.validate();
 
@@ -199,6 +195,21 @@ public class CreateMTMVInfo extends CreateTableInfo {
 
         // set CreateTableInfo information
         setTableInformation(ctx);
+    }
+
+    private void validateUserDistributionForIvm(Map<String, ColumnDefinition> columnMap) {
+        if (!distribution.isExplicit() && !distribution.isHash()) {
+            return;
+        }
+        // Validate the user-visible distribution before IVM rewrites it to row-id,
+        // so invalid HASH columns and explicit RANDOM keep ordinary UNIQUE table semantics.
+        distribution.validate(columnMap, KeysType.UNIQUE_KEYS);
+    }
+
+    private DistributionDescriptor buildIvmRowIdDistribution(DistributionDescriptor sourceDistribution) {
+        int bucketNum = sourceDistribution.translateToCatalogStyle().getBuckets();
+        return new DistributionDescriptor(true, sourceDistribution.isAutoBucket(), bucketNum,
+                Lists.newArrayList(Column.IVM_ROW_ID_COL), sourceDistribution.isExplicit());
     }
 
     private void analyzeAutoRefreshQuery(ConnectContext ctx) throws UserException {

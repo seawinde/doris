@@ -77,7 +77,6 @@ suite("test_ivm_agg_outer_join_1") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_agg_outer_join_1_chain_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 1
         PROPERTIES (
             'replication_num' = '1'
         )

@@ -64,7 +64,6 @@ suite("test_ivm_agg_join_1") {
     sql """
         CREATE MATERIALIZED VIEW ivm_aj1_p1_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT ivm_aj1_p1_custs.cust_id AS cust_id,
@@ -133,7 +132,6 @@ suite("test_ivm_agg_join_1") {
     sql """
         CREATE MATERIALIZED VIEW ivm_aj1_p2_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT ivm_aj1_p2_dept.dname AS dname,
@@ -203,7 +201,6 @@ suite("test_ivm_agg_join_1") {
     sql """
         CREATE MATERIALIZED VIEW ivm_aj1_p3_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT ivm_aj1_p3_stores.rid_ref,
@@ -274,7 +271,6 @@ suite("test_ivm_agg_join_1") {
     sql """
         CREATE MATERIALIZED VIEW ivm_aj1_p4_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT ivm_aj1_p4_t1.cat,
@@ -343,7 +339,6 @@ suite("test_ivm_agg_join_1") {
     sql """
         CREATE MATERIALIZED VIEW ivm_aj1_p5_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT COUNT(*) AS cnt,

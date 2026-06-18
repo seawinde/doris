@@ -1641,11 +1641,13 @@ public class LogicalPlanBuilder extends DorisParserBaseVisitor<Object> {
             bucketNum = Integer.parseInt(ctx.INTEGER_VALUE().getText());
         }
         DistributionDescriptor desc;
+        boolean explicitDistribution = ctx.HASH() != null || ctx.RANDOM() != null
+                || ctx.BUCKETS() != null || ctx.AUTO() != null;
         if (ctx.HASH() != null) {
             desc = new DistributionDescriptor(true, ctx.AUTO() != null, bucketNum,
-                    visitIdentifierList(ctx.hashKeys));
+                    visitIdentifierList(ctx.hashKeys), explicitDistribution);
         } else {
-            desc = new DistributionDescriptor(false, ctx.AUTO() != null, bucketNum, null);
+            desc = new DistributionDescriptor(false, ctx.AUTO() != null, bucketNum, null, explicitDistribution);
         }
 
         Map<String, String> properties = ctx.propertyClause() != null

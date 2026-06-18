@@ -48,7 +48,6 @@ suite("test_ivm_complete_refresh_rowid", "mtmv") {
     sql """
         CREATE MATERIALIZED VIEW ${mvName}
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 1
         PROPERTIES (
             'replication_num' = '1'
         )

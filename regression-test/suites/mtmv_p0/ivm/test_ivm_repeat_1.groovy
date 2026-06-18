@@ -46,7 +46,6 @@ suite("test_ivm_repeat_1") {
     sql """
         CREATE MATERIALIZED VIEW test_ivm_repeat_1_mv
         BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL
-        DISTRIBUTED BY RANDOM BUCKETS 2
         PROPERTIES ('replication_num' = '1')
         AS
         SELECT region,
