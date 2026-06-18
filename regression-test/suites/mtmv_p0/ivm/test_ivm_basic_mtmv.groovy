@@ -16,6 +16,10 @@
 // under the License.
 
 suite("test_ivm_basic_mtmv") {
+    // IVM MVs are UNIQUE_KEYS (MOW) tables. Explicit RANDOM must fail ordinary
+    // UNIQUE table validation; explicit HASH is only valid when user keys cover
+    // the hash columns. These refresh tests omit distribution intentionally and
+    // let IVM rewrite it to HASH(__DORIS_IVM_ROW_ID_COL__).
     sql """drop materialized view if exists mv_ivm_basic;"""
     sql """drop table if exists t_ivm_basic_base;"""
 

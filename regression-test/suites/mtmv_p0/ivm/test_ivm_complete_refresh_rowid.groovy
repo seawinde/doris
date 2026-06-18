@@ -16,6 +16,10 @@
 // under the License.
 
 suite("test_ivm_complete_refresh_rowid", "mtmv") {
+    // IVM MVs are UNIQUE_KEYS (MOW) tables. Explicit RANDOM must fail ordinary
+    // UNIQUE table validation; explicit HASH is only valid when user keys cover
+    // the hash columns. These refresh tests omit distribution intentionally and
+    // let IVM rewrite it to HASH(__DORIS_IVM_ROW_ID_COL__).
     String tableName = "test_ivm_complete_refresh_rowid_base"
     String mvName = "test_ivm_complete_refresh_rowid_mv"
 

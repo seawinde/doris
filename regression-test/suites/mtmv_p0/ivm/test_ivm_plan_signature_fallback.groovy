@@ -16,6 +16,10 @@
 // under the License.
 
 suite("test_ivm_plan_signature_fallback", "nonConcurrent") {
+    // IVM MVs are UNIQUE_KEYS (MOW) tables. Explicit RANDOM must fail ordinary
+    // UNIQUE table validation; explicit HASH is only valid when user keys cover
+    // the hash columns. These refresh tests omit distribution intentionally and
+    // let IVM rewrite it to HASH(__DORIS_IVM_ROW_ID_COL__).
     def tableName = "test_ivm_plan_signature_fallback_t"
     def mvName = "test_ivm_plan_signature_fallback_mv"
     def signatureSaltDebugPoint = "IvmPlanSignatureGenerator.generate.signature_salt"

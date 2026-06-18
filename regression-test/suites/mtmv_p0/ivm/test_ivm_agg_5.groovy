@@ -19,6 +19,10 @@ import org.awaitility.Awaitility
 import static java.util.concurrent.TimeUnit.SECONDS
 
 suite("test_ivm_agg_5") {
+    // IVM MVs are UNIQUE_KEYS (MOW) tables. Explicit RANDOM must fail ordinary
+    // UNIQUE table validation; explicit HASH is only valid when user keys cover
+    // the hash columns. These refresh tests omit distribution intentionally and
+    // let IVM rewrite it to HASH(__DORIS_IVM_ROW_ID_COL__).
 
     // =========================================================
     // Part 1: Bare GROUP BY without aggregate functions (SELECT DISTINCT)

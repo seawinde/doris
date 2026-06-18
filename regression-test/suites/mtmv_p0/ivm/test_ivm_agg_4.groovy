@@ -16,6 +16,10 @@
 // under the License.
 
 suite("test_ivm_agg_4") {
+    // IVM MVs are UNIQUE_KEYS (MOW) tables. Explicit RANDOM must fail ordinary
+    // UNIQUE table validation; explicit HASH is only valid when user keys cover
+    // the hash columns. These refresh tests omit distribution intentionally and
+    // let IVM rewrite it to HASH(__DORIS_IVM_ROW_ID_COL__).
 
     // =========================================================
     // Part 15: Expressions in agg arguments — SUM(v1 + v2), MIN(v1 * 2)
