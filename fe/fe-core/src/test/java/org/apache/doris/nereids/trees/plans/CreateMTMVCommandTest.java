@@ -1124,6 +1124,9 @@ public class CreateMTMVCommandTest extends TestWithFeService {
 
     @Test
     public void testCreateIncrementalMVReusesMowPartitionKeyValidation() throws Exception {
+        // Force the analyzed partition column into a value-column shape, then
+        // invoke partition validation directly to verify IVM reuses the ordinary
+        // MOW rule that partition columns must be key columns.
         createTable("CREATE TABLE test.ivm_partition_mow_validate_base (\n"
                 + " `k1` INT NOT NULL,\n"
                 + " `dt` DATE NOT NULL,\n"

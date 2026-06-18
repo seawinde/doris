@@ -198,12 +198,20 @@ public class CreateMTMVInfo extends CreateTableInfo {
         setTableInformation(ctx);
     }
 
+    /**
+     * Validate the distribution written by the user before IVM replaces it with
+     * the hidden row-id distribution used by the physical MOW table.
+     */
     private void validateUserDistributionForIvm(Map<String, ColumnDefinition> columnMap) {
         // Validate the user-visible distribution before IVM rewrites it to row-id,
         // so invalid HASH columns and explicit RANDOM keep ordinary UNIQUE table semantics.
         distribution.validate(columnMap, KeysType.UNIQUE_KEYS);
     }
 
+    /**
+     * Build the physical IVM distribution. If the user supplied a distribution,
+     * keep only its bucket configuration; the hash key must always be row-id.
+     */
     private DistributionDescriptor buildIvmRowIdDistribution(DistributionDescriptor sourceDistribution) {
         boolean isAutoBucket = sourceDistribution != null && sourceDistribution.isAutoBucket();
         int bucketNum = sourceDistribution == null ? FeConstants.default_bucket_num
