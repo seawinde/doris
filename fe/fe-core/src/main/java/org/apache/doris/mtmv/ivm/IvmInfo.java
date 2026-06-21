@@ -55,6 +55,7 @@ public class IvmInfo {
         this.enableIvm = other.enableIvm;
         this.binlogBroken = other.binlogBroken;
         this.runningIvmRefresh = other.runningIvmRefresh;
+        this.planSignature = other.planSignature;
         this.baseTableStreams = Maps.newHashMap();
         if (other.baseTableStreams != null) {
             for (Map.Entry<BaseTableInfo, IvmStreamRef> entry : other.baseTableStreams.entrySet()) {

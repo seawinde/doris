@@ -116,6 +116,7 @@ public class MTMVTaskTest {
         Mockito.when(mtmvRefreshInfo.getRefreshMethod()).thenReturn(RefreshMethod.COMPLETE);
 
         Mockito.when(mtmv.hasCompleteRefreshSnapshot()).thenReturn(true);
+        Mockito.when(mtmv.hasRefreshSnapshot()).thenReturn(true);
     }
 
     @After
@@ -401,7 +402,7 @@ public class MTMVTaskTest {
     public void testExecuteIvmAttemptFallsBackToCompleteForIncompleteRefreshSnapshot() throws Exception {
         Mockito.when(mtmv.isIvm()).thenReturn(true);
         Mockito.when(mtmv.getName()).thenReturn("test_mv");
-        Mockito.when(mtmv.hasCompleteRefreshSnapshot()).thenReturn(false);
+        Mockito.when(mtmv.hasRefreshSnapshot()).thenReturn(false);
         MTMVTask task = new MTMVTask(mtmv, relation, new MTMVTaskContext(MTMVTaskTriggerMode.MANUAL));
 
         try (MockedConstruction<IvmRefreshManager> ignored = Mockito.mockConstruction(IvmRefreshManager.class,
@@ -420,7 +421,7 @@ public class MTMVTaskTest {
     public void testExecuteIvmAttemptRejectsIncrementalWithIncompleteRefreshSnapshot() {
         Mockito.when(mtmv.isIvm()).thenReturn(true);
         Mockito.when(mtmv.getName()).thenReturn("test_mv");
-        Mockito.when(mtmv.hasCompleteRefreshSnapshot()).thenReturn(false);
+        Mockito.when(mtmv.hasRefreshSnapshot()).thenReturn(false);
         MTMVTaskContext context = MTMVTaskContext.of(MTMVTaskTriggerMode.MANUAL, null, RefreshMode.INCREMENTAL);
         MTMVTask task = new MTMVTask(mtmv, relation, context);
 
@@ -429,6 +430,51 @@ public class MTMVTaskTest {
                 () -> Deencapsulation.invoke(task, "executeIvmAttempt", new Object[] {request}));
 
         Assert.assertTrue(ex.getMessage().contains("INCOMPLETE_REFRESH_SNAPSHOT"));
+    }
+
+    @Test
+    public void testExecuteIvmAttemptAllowsIncompletePctSnapshotWhenBaselineExists() throws Exception {
+        Mockito.when(mtmv.isIvm()).thenReturn(true);
+        Mockito.when(mtmv.getName()).thenReturn("test_mv");
+        Mockito.when(mtmv.hasCompleteRefreshSnapshot()).thenReturn(false);
+        Mockito.when(mtmv.hasRefreshSnapshot()).thenReturn(true);
+        MTMVTaskContext context = MTMVTaskContext.of(MTMVTaskTriggerMode.MANUAL, null, RefreshMode.INCREMENTAL);
+        MTMVTask task = new MTMVTask(mtmv, relation, context);
+
+        try (MockedConstruction<IvmRefreshManager> ignored = Mockito.mockConstruction(IvmRefreshManager.class,
+                (mock, constructionContext) -> Mockito.when(mock.doRefresh(mtmv)).thenReturn(
+                        IvmRefreshResult.success()))) {
+            Object request = Deencapsulation.invoke(task, "resolveRefreshRequest");
+            Object result = Deencapsulation.invoke(task, "executeIvmAttempt", new Object[] {request});
+            Assert.assertEquals("SUCCESS", result.toString());
+            Assert.assertEquals(1, ignored.constructed().size());
+        }
+    }
+
+    @Test
+    public void testSystemDefaultIncrementalInitializesBaselineWithCompleteRefresh() {
+        Mockito.when(mtmv.isIvm()).thenReturn(true);
+        Mockito.when(mtmv.hasRefreshSnapshot()).thenReturn(false);
+        Mockito.when(mtmvRefreshInfo.getRefreshMethod()).thenReturn(RefreshMethod.INCREMENTAL);
+        MTMVTaskContext context = MTMVTaskContext.forMvDefault(MTMVTaskTriggerMode.SYSTEM);
+        MTMVTask task = new MTMVTask(mtmv, relation, context);
+
+        Object request = Deencapsulation.invoke(task, "resolveRefreshRequest");
+        Assert.assertEquals(RefreshMode.COMPLETE, Deencapsulation.getField(request, "refreshMode"));
+        Assert.assertFalse(Deencapsulation.getField(request, "allowFallback"));
+    }
+
+    @Test
+    public void testManualIncrementalDoesNotInitializeBaselineWithCompleteRefresh() {
+        Mockito.when(mtmv.isIvm()).thenReturn(true);
+        Mockito.when(mtmv.hasRefreshSnapshot()).thenReturn(false);
+        Mockito.when(mtmvRefreshInfo.getRefreshMethod()).thenReturn(RefreshMethod.INCREMENTAL);
+        MTMVTaskContext context = MTMVTaskContext.of(MTMVTaskTriggerMode.MANUAL, null, RefreshMode.INCREMENTAL);
+        MTMVTask task = new MTMVTask(mtmv, relation, context);
+
+        Object request = Deencapsulation.invoke(task, "resolveRefreshRequest");
+        Assert.assertEquals(RefreshMode.INCREMENTAL, Deencapsulation.getField(request, "refreshMode"));
+        Assert.assertFalse(Deencapsulation.getField(request, "allowFallback"));
     }
 
     @Test

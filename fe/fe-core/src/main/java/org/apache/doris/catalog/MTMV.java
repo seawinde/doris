@@ -480,6 +480,18 @@ public class MTMV extends OlapTable {
         }
     }
 
+    public boolean hasRefreshSnapshot() {
+        readMvLock();
+        try {
+            // IVM only needs to know whether a baseline has ever been built.
+            // A newly added MV partition legitimately has no PCT snapshot yet,
+            // but that must not block row-level incremental refresh.
+            return refreshSnapshot != null && !MapUtils.isEmpty(refreshSnapshot.getPartitionSnapshots());
+        } finally {
+            readMvUnlock();
+        }
+    }
+
     public IvmInfo getIvmInfo() {
         writeMvLock();
         try {

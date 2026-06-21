@@ -387,6 +387,12 @@ public class MTMVTask extends AbstractTask {
                 throw new JobException("MTMV " + mtmv.getName()
                         + " has unknown refresh method, please refresh or recreate it.");
             }
+            if (refreshMethod == RefreshMethod.INCREMENTAL && mtmv.isIvm() && !mtmv.hasRefreshSnapshot()) {
+                // System/default refresh tasks may be the MV's first execution.
+                // Build the initial baseline with COMPLETE; explicit manual
+                // INCREMENTAL requests still keep strict incremental semantics.
+                return new RefreshRequest(RefreshMode.COMPLETE, false, Lists.newArrayList(), false);
+            }
             return new RefreshRequest(RefreshMode.valueOf(refreshMethod.name()),
                     mtmv.getRefreshInfo().allowFallback(), Lists.newArrayList(), false);
         }
@@ -505,7 +511,7 @@ public class MTMVTask extends AbstractTask {
             throw new JobException("Cannot use " + request.refreshMode
                     + " refresh on a materialized view without INCREMENTAL capability.");
         }
-        if (!mtmv.hasCompleteRefreshSnapshot()) {
+        if (!mtmv.hasRefreshSnapshot()) {
             ivmFallbackReason = "INCOMPLETE_REFRESH_SNAPSHOT";
             if (!request.allowFallback) {
                 throw new JobException("IVM incremental refresh failed for mv=" + mtmv.getName()
@@ -562,13 +568,17 @@ public class MTMVTask extends AbstractTask {
                     mtmv.getName(), getTaskId());
             return AttemptResultType.FALLBACK_TO_COMPLETE;
         }
+        if (ivmResult.getFailureReason() == IvmFailureReason.PLAN_SIGNATURE_MISMATCH) {
+            LOG.warn("IVM refresh fell back for mv={}, reason={}, detail={}, taskId={}. "
+                    + "Continuing with COMPLETE refresh.",
+                    mtmv.getName(), ivmResult.getFailureReason(),
+                    ivmResult.getDetailMessage(), getTaskId());
+            return AttemptResultType.FALLBACK_TO_COMPLETE;
+        }
         LOG.warn("IVM refresh fell back for mv={}, reason={}, detail={}, taskId={}. "
                 + "Continuing with partition-based refresh.",
                 mtmv.getName(), ivmResult.getFailureReason(),
                 ivmResult.getDetailMessage(), getTaskId());
-        if (ivmResult.getFailureReason() == IvmFailureReason.PLAN_SIGNATURE_MISMATCH) {
-            return AttemptResultType.FALLBACK_TO_COMPLETE;
-        }
         return AttemptResultType.FALLBACK_ALLOWED;
     }
 

@@ -34,6 +34,7 @@ public class IvmInfoTest {
         info.setEnableIvm(true);
         info.setBinlogBroken(true);
         info.setRunningIvmRefresh(true);
+        info.setPlanSignature("signature");
         BaseTableInfo baseTableInfo = Mockito.mock(BaseTableInfo.class);
         IvmStreamRef streamRef = new IvmStreamRef(42L);
         streamRef.setLatestTso(100L);
@@ -46,6 +47,7 @@ public class IvmInfoTest {
         Assertions.assertTrue(copy.isEnableIvm());
         Assertions.assertTrue(copy.isBinlogBroken());
         Assertions.assertTrue(copy.isRunningIvmRefresh());
+        Assertions.assertEquals("signature", copy.getPlanSignature());
         Assertions.assertEquals(1, copy.getBaseTableStreams().size());
         IvmStreamRef copiedRef = copy.getBaseTableStreams().get(baseTableInfo);
         Assertions.assertNotSame(streamRef, copiedRef);
