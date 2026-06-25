@@ -39,6 +39,7 @@ import org.apache.doris.nereids.trees.plans.RelationId;
 import org.apache.doris.nereids.trees.plans.ScoreRangeInfo;
 import org.apache.doris.nereids.trees.plans.visitor.PlanVisitor;
 import org.apache.doris.nereids.util.Utils;
+import org.apache.doris.qe.ConnectContext;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
@@ -138,10 +139,11 @@ public class LogicalOlapTableStreamScan extends LogicalOlapScan {
         if (cachedOutput.isPresent()) {
             return cachedOutput.get();
         }
-        // for reset, we could use get full schema of base table;
-        // otherwise, we only need to get the schema without hidden columns
-        List<Column> baseSchema = table.getBaseSchema(isReset);
+        List<Column> baseSchema = table.getBaseSchema(true);
         List<SlotReference> slotFromColumn = createSlotsVectorized(baseSchema);
+
+        boolean ivmRewriteEnabled = ConnectContext.get() != null
+                && ConnectContext.get().getSessionVariable().isEnableIvmNormalRewrite();
 
         ImmutableList.Builder<Slot> slots = ImmutableList.builder();
         IdGenerator<ExprId> exprIdGenerator = StatementScopeIdGenerator.getExprIdGenerator();
@@ -150,6 +152,10 @@ public class LogicalOlapTableStreamScan extends LogicalOlapScan {
             final int index = i;
             Column col = baseSchema.get(i);
             if (col.getName().startsWith(Column.BINLOG_BEFORE_PREFIX)) {
+                continue;
+            }
+            // Keep visible columns, and IVM row-id during IVM rewrite. Skip all other hidden columns.
+            if (!col.isVisible() && !(Column.IVM_ROW_ID_COL.equals(col.getName()) && ivmRewriteEnabled)) {
                 continue;
             }
             Pair<Long, String> key = Pair.of(selectedIndexId, col.getName());
