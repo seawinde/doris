@@ -113,7 +113,7 @@ public class LogicalOlapTableStreamScan extends LogicalOlapScan {
                 indexSelected, preAggStatus, specifiedPartitions, hints, cacheSlotWithSlotName, cachedOutput,
                 tableSample, directMvScan, colToSubPathsMap, specifiedTabletIds, operativeSlots, virtualColumns,
                 scoreOrderKeys, scoreLimit, scoreRangeInfo, annOrderKeys, annLimit, tableAlias,
-                partitionPrunablePredicates, scanParams, -1, false);
+                partitionPrunablePredicates, scanParams, -1);
         this.isNormalized = isNormalized;
         this.isIncrementalScan = isIncrementalScan;
         this.isReset = isReset;
@@ -278,20 +278,6 @@ public class LogicalOlapTableStreamScan extends LogicalOlapScan {
                         scoreOrderKeys, scoreLimit, scoreRangeInfo, annOrderKeys, annLimit, tableAlias,
                         partitionPrunablePredicates, scanParams,
                         isNormalized, isIncrementalScan, isReset, isSnapshot));
-    }
-
-    /** Returns a copy with the given RelationId, preserving the stream scan type. */
-    @Override
-    public LogicalOlapTableStreamScan withRelationId(RelationId relationId) {
-        return AbstractPlan.copyWithSameId(this, () ->
-                new LogicalOlapTableStreamScan(relationId, (Table) table, qualifier,
-                        groupExpression, Optional.of(getLogicalProperties()),
-                        selectedPartitionIds, partitionPruned, hasPartitionPredicate, selectedTabletIds,
-                        selectedIndexId, indexSelected, preAggStatus, manuallySpecifiedPartitions,
-                        hints, cacheSlotWithSlotName, cachedOutput, tableSample, directMvScan,
-                        colToSubPathsMap, manuallySpecifiedTabletIds, operativeSlots, virtualColumns,
-                        scoreOrderKeys, scoreLimit, scoreRangeInfo, annOrderKeys, annLimit, tableAlias,
-                        partitionPrunablePredicates, scanParams, isNormalized, isIncrementalScan));
     }
 
     /** Returns a copy with the given incremental scan flag. */
