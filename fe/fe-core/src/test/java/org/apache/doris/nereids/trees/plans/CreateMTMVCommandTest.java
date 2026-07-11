@@ -24,11 +24,18 @@ import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.MTMV;
+import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.info.TableNameInfo;
+import org.apache.doris.catalog.stream.OlapTableStream;
 import org.apache.doris.common.Config;
+import org.apache.doris.common.DdlException;
+import org.apache.doris.common.jmockit.Deencapsulation;
 import org.apache.doris.common.util.PropertyAnalyzer;
+import org.apache.doris.mtmv.BaseTableInfo;
 import org.apache.doris.mtmv.MTMVRefreshEnum.RefreshMethod;
+import org.apache.doris.mtmv.MTMVUtil;
+import org.apache.doris.mtmv.ivm.IvmRewriteContext;
 import org.apache.doris.mtmv.ivm.IvmUtil;
 import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.exceptions.AnalysisException;
@@ -671,7 +678,7 @@ public class CreateMTMVCommandTest extends TestWithFeService {
                 + "distributed by hash(k1) buckets 1\n"
                 + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
 
-        // HAVING produces a Filter above Aggregate, which is rejected by IvmNormalizeMtmv
+        // HAVING produces a Filter above Aggregate, which is rejected by IvmNormalizeMTMV
         org.apache.doris.nereids.exceptions.AnalysisException ex = Assertions.assertThrows(
                 org.apache.doris.nereids.exceptions.AnalysisException.class,
                 () -> getPartitionTableInfo(
@@ -1555,6 +1562,22 @@ public class CreateMTMVCommandTest extends TestWithFeService {
     }
 
     @Test
+    public void testCreateIncrementalMVAnalyzeSetsNormalizeRewriteContext() throws Exception {
+        createTable("create table test.ivm_context_base (k1 int, v1 int)\n"
+                + "duplicate key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1', 'binlog.enable' = 'true', 'binlog.format' = 'ROW');");
+        CreateMTMVInfo info = getPartitionTableInfo("CREATE MATERIALIZED VIEW ivm_context_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS SELECT k1, v1 FROM ivm_context_base;");
+
+        Assertions.assertTrue(info.isEnableIvm());
+        Assertions.assertEquals(IvmRewriteContext.Mode.NORMALIZE,
+                connectContext.getStatementContext().getIvmRewriteContext().orElseThrow().getMode());
+    }
+
+    @Test
     public void testCreateIncrementalMVAcceptsMOWBaseTable() throws Exception {
         createTable("create table test.ivm_mow_base (k1 int, v1 int)\n"
                 + "unique key(k1)\n"
@@ -1995,7 +2018,7 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         MTMV mtmv = getMtmv("ivm_stream_mv");
         Assertions.assertTrue(mtmv.isIvm());
         Database db = Env.getCurrentInternalCatalog().getDbOrDdlException("test");
-        String streamName = IvmUtil.streamName(mtmv.getId(), "ivm_stream_base");
+        String streamName = ivmStreamName(mtmv, "ivm_stream_base");
         TableIf streamTable = db.getTableNullable(streamName);
         Assertions.assertNotNull(streamTable,
                 "Stream table should be auto-created for IVM base table");
@@ -2025,11 +2048,74 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         Assertions.assertTrue(mtmv.isIvm());
         Database db = Env.getCurrentInternalCatalog().getDbOrDdlException("test");
         for (String baseName : new String[]{"ivm_multi_stream_base1", "ivm_multi_stream_base2"}) {
-            String streamName = IvmUtil.streamName(mtmv.getId(), baseName);
+            String streamName = ivmStreamName(mtmv, baseName);
             TableIf streamTable = db.getTableNullable(streamName);
             Assertions.assertNotNull(streamTable,
                     "Stream table should be auto-created for base table " + baseName);
         }
+    }
+
+    @Test
+    public void testCreateIncrementalMvUsesDistinctStreamsForCrossDatabaseSameNamedTables() throws Exception {
+        createDatabase("ivm_stream_other_db");
+        createTable("create table test.ivm_same_name_base (k1 int, v1 int)\n"
+                + "unique key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1', 'enable_unique_key_merge_on_write' = 'true', "
+                + "'binlog.enable' = 'true', 'binlog.format' = 'ROW', 'binlog.need_historical_value' = 'true');");
+        createTable("create table ivm_stream_other_db.ivm_same_name_base (k1 int, v1 int)\n"
+                + "unique key(k1)\n"
+                + "distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1', 'enable_unique_key_merge_on_write' = 'true', "
+                + "'binlog.enable' = 'true', 'binlog.format' = 'ROW', 'binlog.need_historical_value' = 'true');");
+        createMtmv("CREATE MATERIALIZED VIEW ivm_cross_db_stream_mv\n"
+                + " BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + " DISTRIBUTED BY RANDOM BUCKETS 2\n"
+                + " PROPERTIES ('replication_num' = '1')\n"
+                + " AS SELECT test.ivm_same_name_base.k1, test.ivm_same_name_base.v1\n"
+                + " FROM test.ivm_same_name_base\n"
+                + " INNER JOIN ivm_stream_other_db.ivm_same_name_base\n"
+                + " ON test.ivm_same_name_base.k1 = ivm_stream_other_db.ivm_same_name_base.k1;");
+        MTMV mtmv = getMtmv("ivm_cross_db_stream_mv");
+        BaseTableInfo firstBase = findBaseTable(mtmv, "test", "ivm_same_name_base");
+        BaseTableInfo secondBase = findBaseTable(mtmv, "ivm_stream_other_db", "ivm_same_name_base");
+        String firstStreamName = IvmUtil.streamName(mtmv, MTMVUtil.getTable(firstBase));
+        String secondStreamName = IvmUtil.streamName(mtmv, MTMVUtil.getTable(secondBase));
+
+        Assertions.assertNotEquals(firstStreamName, secondStreamName);
+        Database mvDb = Env.getCurrentInternalCatalog().getDbOrDdlException("test");
+        OlapTableStream firstStream = (OlapTableStream) mvDb.getTableOrMetaException(firstStreamName);
+        OlapTableStream secondStream = (OlapTableStream) mvDb.getTableOrMetaException(secondStreamName);
+        OlapTable firstTable = (OlapTable) Env.getCurrentInternalCatalog().getDbOrDdlException("test")
+                .getTableOrMetaException("ivm_same_name_base");
+        OlapTable secondTable = (OlapTable) Env.getCurrentInternalCatalog()
+                .getDbOrDdlException("ivm_stream_other_db").getTableOrMetaException("ivm_same_name_base");
+        Assertions.assertSame(firstTable, firstStream.getBaseTableNullable());
+        Assertions.assertSame(secondTable, secondStream.getBaseTableNullable());
+    }
+
+    @Test
+    public void testCreateIvmStreamNameCollisionPreservesExistingTable() throws Exception {
+        createTable("create table test.ivm_stream_collision_base (k1 int)\n"
+                + "duplicate key(k1) distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1');");
+        Database db = Env.getCurrentInternalCatalog().getDbOrDdlException("test");
+        TableIf baseTable = db.getTableOrMetaException("ivm_stream_collision_base");
+        MTMV mtmv = Mockito.mock(MTMV.class);
+        Mockito.when(mtmv.getId()).thenReturn(1234L);
+        Mockito.when(mtmv.getName()).thenReturn("ivm_stream_collision_mv");
+        Mockito.when(mtmv.getQualifiedDbName()).thenReturn("test");
+        String streamName = IvmUtil.streamName(mtmv, baseTable);
+        createTable("create table test.`" + streamName + "` (k1 int)\n"
+                + "duplicate key(k1) distributed by hash(k1) buckets 1\n"
+                + "properties('replication_num' = '1');");
+        TableIf existingTable = db.getTableOrMetaException(streamName);
+
+        Assertions.assertThrows(DdlException.class, () -> Deencapsulation.invoke(
+                CreateMTMVCommand.class, "createTableStream", connectContext, db, mtmv, baseTable,
+                new BaseTableInfo(baseTable), new ArrayList<String>()));
+
+        Assertions.assertSame(existingTable, db.getTableNullable(streamName));
     }
 
     @Test
@@ -2056,10 +2142,10 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         MTMV mtmv = getMtmv("ivm_excl_stream_mv");
         Assertions.assertTrue(mtmv.isIvm());
         Database db = Env.getCurrentInternalCatalog().getDbOrDdlException("test");
-        String stream1 = IvmUtil.streamName(mtmv.getId(), "ivm_excl_stream_base1");
+        String stream1 = ivmStreamName(mtmv, "ivm_excl_stream_base1");
         Assertions.assertNotNull(db.getTableNullable(stream1),
                 "Stream should be created for non-excluded table");
-        String stream2 = IvmUtil.streamName(mtmv.getId(), "ivm_excl_stream_base2");
+        String stream2 = ivmStreamName(mtmv, "ivm_excl_stream_base2");
         Assertions.assertNull(db.getTableNullable(stream2),
                 "Stream should NOT be created for excluded table");
     }
@@ -2079,8 +2165,23 @@ public class CreateMTMVCommandTest extends TestWithFeService {
         MTMV mtmv = getMtmv("ivm_no_stream_mv");
         Assertions.assertFalse(mtmv.isIvm());
         Database db = Env.getCurrentInternalCatalog().getDbOrDdlException("test");
-        String streamName = IvmUtil.streamName(mtmv.getId(), "ivm_no_stream_base");
+        String streamName = ivmStreamName(mtmv, "ivm_no_stream_base");
         Assertions.assertNull(db.getTableNullable(streamName),
                 "Stream should NOT be auto-created for non-IVM MV");
+    }
+
+    private String ivmStreamName(MTMV mtmv, String baseTableName) throws Exception {
+        BaseTableInfo baseTableInfo = mtmv.getRelation().getBaseTables().stream()
+                .filter(info -> baseTableName.equals(info.getTableName()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("Base table not found: " + baseTableName));
+        return IvmUtil.streamName(mtmv, MTMVUtil.getTable(baseTableInfo));
+    }
+
+    private BaseTableInfo findBaseTable(MTMV mtmv, String dbName, String tableName) {
+        return mtmv.getRelation().getBaseTables().stream()
+                .filter(info -> dbName.equals(info.getDbName()) && tableName.equals(info.getTableName()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("Base table not found: " + dbName + "." + tableName));
     }
 }

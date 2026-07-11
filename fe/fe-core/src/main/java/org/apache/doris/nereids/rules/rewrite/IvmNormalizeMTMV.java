@@ -27,8 +27,8 @@ import org.apache.doris.info.TableNameInfoUtils;
 import org.apache.doris.mtmv.MTMVPartitionUtil;
 import org.apache.doris.mtmv.ivm.IvmException;
 import org.apache.doris.mtmv.ivm.IvmFailureReason;
-import org.apache.doris.mtmv.ivm.IvmNormalizeResult;
 import org.apache.doris.mtmv.ivm.IvmPlanSignatureGenerator;
+import org.apache.doris.mtmv.ivm.IvmRewriteResult;
 import org.apache.doris.mtmv.ivm.IvmUtil;
 import org.apache.doris.mtmv.ivm.agg.IvmAggFunctionRegistry;
 import org.apache.doris.mtmv.ivm.agg.IvmAggMeta;
@@ -62,7 +62,6 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalUnion;
 import org.apache.doris.nereids.trees.plans.visitor.CustomRewriter;
 import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanRewriter;
 import org.apache.doris.nereids.types.LargeIntType;
-import org.apache.doris.qe.ConnectContext;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -85,7 +84,7 @@ import java.util.stream.Collectors;
  *   FROM t GROUP BY k1, k2
  * }</pre>
  *
- * <p>After IvmNormalizeMtmv the plan shape is:
+ * <p>After IvmNormalizeMTMV the plan shape is:
  * <pre>{@code
  * ResultSink [row_id, visible outputs, hidden state cols]
  *   └── Project [
@@ -138,9 +137,8 @@ import java.util.stream.Collectors;
  * OlapScan, filter, project, aggregate, inner/cross join, left/right/full outer join chain whose
  * null side does not contain another outer join, UNION ALL, result sink, logical olap table sink.
  */
-public class IvmNormalizeMtmv extends DefaultPlanRewriter<IvmNormalizeMtmv.NormalizeContext>
+public class IvmNormalizeMTMV extends DefaultPlanRewriter<IvmNormalizeMTMV.NormalizeContext>
         implements CustomRewriter {
-
     static final class NormalizeContext {
         private static final NormalizeContext ROOT = new NormalizeContext(true, false, false, false);
 
@@ -186,25 +184,28 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<IvmNormalizeMtmv.Norma
         }
     }
 
-    private final IvmNormalizeResult normalizeResult = new IvmNormalizeResult();
+    private IvmRewriteResult rewriteResult;
     private final IvmAggFunctionRegistry aggFunctionRegistry = IvmAggFunctionRegistry.INSTANCE;
     private StatementContext statementContext;
 
     @Override
     public Plan rewriteRoot(Plan plan, JobContext jobContext) {
-        ConnectContext connectContext = jobContext.getCascadesContext().getConnectContext();
-        if (connectContext == null || !connectContext.getSessionVariable().isEnableIvmNormalRewrite()) {
+        boolean enabledByIvmRewriteContext = jobContext.getCascadesContext().getStatementContext()
+                .getIvmRewriteContext().isPresent();
+        if (!enabledByIvmRewriteContext) {
             return plan;
         }
         // Idempotency: if already normalized (e.g. rewritten plan re-entering), skip.
-        if (jobContext.getCascadesContext().getIvmNormalizeResult().isPresent()) {
+        IvmRewriteResult rewriteResult = jobContext.getCascadesContext().getOrCreateIvmRewriteResult();
+        if (rewriteResult.isNormalizeRewritten()) {
             return plan;
         }
+        rewriteResult.setNormalizeRewritten(true);
+        this.rewriteResult = rewriteResult;
         statementContext = jobContext.getCascadesContext().getStatementContext();
-        jobContext.getCascadesContext().setIvmNormalizeResult(normalizeResult);
         Plan result = plan.accept(this, NormalizeContext.ROOT);
-        normalizeResult.setNormalizedPlan(result);
-        normalizeResult.setPlanSignature(new IvmPlanSignatureGenerator().generate(normalizeResult));
+        rewriteResult.setNormalizedPlan(result);
+        rewriteResult.setPlanSignature(new IvmPlanSignatureGenerator().generate(result));
         return result;
     }
 
@@ -226,7 +227,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<IvmNormalizeMtmv.Norma
         Pair<Expression, Boolean> rowId = buildRowId(table, scan);
         validateBinlogEnabled(scan);
         Alias rowIdAlias = new Alias(rowId.first, Column.IVM_ROW_ID_COL);
-        normalizeResult.addRowId(rowIdAlias.toSlot(), rowId.second);
+        rewriteResult.addRowId(rowIdAlias.toSlot(), rowId.second);
         List<NamedExpression> outputs = ImmutableList.<NamedExpression>builder()
                 .add(rowIdAlias)
                 .addAll(scan.getOutput().stream()
@@ -309,8 +310,8 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<IvmNormalizeMtmv.Norma
         Slot rightRowIdSlot = IvmUtil.findRowIdSlot(newRight.getOutput(), "right child of join");
 
         // Look up each child's row_id determinism from the accumulated map
-        boolean leftDet = normalizeResult.isDeterministic(leftRowIdSlot);
-        boolean rightDet = normalizeResult.isDeterministic(rightRowIdSlot);
+        boolean leftDet = rewriteResult.isDeterministic(leftRowIdSlot);
+        boolean rightDet = rewriteResult.isDeterministic(rightRowIdSlot);
         // Aggregate MVs rebuild the final MV row-id from group-by keys. Child outer join row-ids only feed signed
         // aggregate input rows, so retained-side determinism is not required below the aggregate.
         if (joinType.isOuterJoin() && !context.isInsideAggregate) {
@@ -336,7 +337,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<IvmNormalizeMtmv.Norma
         }
 
         // Add composed row_id to map (don't clear — child entries are kept for strategy lookup)
-        normalizeResult.addRowId(joinRowIdAlias.toSlot(), leftDet && rightDet);
+        rewriteResult.addRowId(joinRowIdAlias.toSlot(), leftDet && rightDet);
         return new LogicalProject<>(projectOutputs.build(), newJoin);
     }
 
@@ -376,7 +377,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<IvmNormalizeMtmv.Norma
             Plan normalizedChild = union.child(i).accept(this, childContext);
             Slot childRowId = IvmUtil.findRowIdSlot(normalizedChild.getOutput(),
                     "child " + i + " of union");
-            allDet &= normalizeResult.isDeterministic(childRowId);
+            allDet &= rewriteResult.isDeterministic(childRowId);
 
             // Wrap with Project: hash(arm_index, child_row_id) as row_id, plus other cols
             Expression hashExpr = IvmUtil.buildRowIdHash(
@@ -405,7 +406,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<IvmNormalizeMtmv.Norma
         SlotReference unionRowId = new SlotReference(
                 StatementScopeIdGenerator.newExprId(),
                 Column.IVM_ROW_ID_COL, LargeIntType.INSTANCE, false, ImmutableList.of());
-        normalizeResult.addRowId(unionRowId, allDet);
+        rewriteResult.addRowId(unionRowId, allDet);
 
         // Rebuild UNION: [union_row_id, ...original_outputs...]
         ImmutableList.Builder<NamedExpression> newOutputs = ImmutableList.builder();
@@ -436,7 +437,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<IvmNormalizeMtmv.Norma
      *   <li>Validates and normalizes all aggregate functions via {@link IvmAggFunctionRegistry}</li>
      *   <li>Adds hidden state aggregate columns to the Aggregate output</li>
      *   <li>Wraps with a Project that computes row-id = hash(group keys) or constant</li>
-     *   <li>Stores {@link IvmAggMeta} in {@link IvmNormalizeResult}</li>
+     *   <li>Stores {@link IvmAggMeta} in {@link IvmRewriteResult}</li>
      * </ol>
      *
      * <p>Returns: {@code Project(ivm hidden cols + original agg outputs) → Aggregate(with hidden aggs)}
@@ -504,8 +505,8 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<IvmNormalizeMtmv.Norma
         Expression rowIdExpr = IvmUtil.buildRowIdHash(groupByExprs);
         Alias rowIdAlias = new Alias(rowIdExpr, Column.IVM_ROW_ID_COL);
 
-        // Add agg-level row-id to IvmNormalizeResult (child entries are kept for strategy lookup)
-        normalizeResult.addRowId(rowIdAlias.toSlot(), !scalarAgg);
+        // Add agg-level row-id to IvmRewriteResult (child entries are kept for strategy lookup)
+        rewriteResult.addRowId(rowIdAlias.toSlot(), !scalarAgg);
 
         // Project output: row_id first, then all Aggregate output slots (original + hidden)
         ImmutableList.Builder<NamedExpression> projectOutputs = ImmutableList.builder();
@@ -527,7 +528,7 @@ public class IvmNormalizeMtmv extends DefaultPlanRewriter<IvmNormalizeMtmv.Norma
 
         IvmAggMeta aggMeta = new IvmAggMeta(scalarAgg, resolvedGroupKeys,
                 groupCountSlot, resolvedTargets);
-        normalizeResult.setAggMeta(aggMeta);
+        rewriteResult.setAggMeta(aggMeta);
 
         return new LogicalProject<>(projectOutputs.build(), newAgg);
     }

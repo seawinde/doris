@@ -17,6 +17,9 @@
 
 package org.apache.doris.mtmv.ivm;
 
+import org.apache.doris.catalog.MTMV;
+import org.apache.doris.catalog.OlapTable;
+import org.apache.doris.common.Config;
 import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.IsNull;
@@ -31,6 +34,7 @@ import org.apache.doris.nereids.types.VarcharType;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import java.util.Collections;
 import java.util.List;
@@ -110,14 +114,48 @@ class IvmUtilTest {
 
     @Test
     void testStreamName() {
-        Assertions.assertEquals("__doris_ivm_stream_123_t1", IvmUtil.streamName(123L, "t1"));
-        Assertions.assertEquals("__doris_ivm_stream_456_base_table", IvmUtil.streamName(456L, "base_table"));
+        MTMV mtmv = mockMtmv(123L, "sales_mv");
+        OlapTable firstBase = mockBaseTable(456L);
+        OlapTable secondBase = mockBaseTable(789L);
+
+        Assertions.assertEquals("__doris_ivm_stream_sales_mv_3f_co", IvmUtil.streamName(mtmv, firstBase));
+        Assertions.assertNotEquals(IvmUtil.streamName(mtmv, firstBase), IvmUtil.streamName(mtmv, secondBase));
     }
 
     @Test
     void testStreamNamePrefixConsistency() {
-        String name = IvmUtil.streamName(1L, "t");
+        String name = IvmUtil.streamName(mockMtmv(1L, "mv"), mockBaseTable(2L));
         Assertions.assertTrue(name.startsWith(IvmUtil.IVM_STREAM_PREFIX));
+    }
+
+    @Test
+    void testStreamNameRespectsLengthLimit() {
+        int originalLimit = Config.table_name_length_limit;
+        try {
+            Config.table_name_length_limit = 32;
+            String name = IvmUtil.streamName(mockMtmv(1L, "a_very_long_materialized_view_name"),
+                    mockBaseTable(2L));
+
+            Assertions.assertEquals(Config.table_name_length_limit, name.length());
+            Assertions.assertTrue(name.endsWith("_1_2"));
+        } finally {
+            Config.table_name_length_limit = originalLimit;
+        }
+    }
+
+    @Test
+    void testStreamNameDoesNotSplitUnicodeSurrogatePair() {
+        int originalLimit = Config.table_name_length_limit;
+        try {
+            int readableLength = 2;
+            Config.table_name_length_limit = IvmUtil.IVM_STREAM_PREFIX.length() + readableLength + "_1_2".length();
+
+            String name = IvmUtil.streamName(mockMtmv(1L, "a\ud83d\ude00b"), mockBaseTable(2L));
+
+            Assertions.assertEquals(IvmUtil.IVM_STREAM_PREFIX + "a_1_2", name);
+        } finally {
+            Config.table_name_length_limit = originalLimit;
+        }
     }
 
     // ==================== buildRowIdHash tests ====================
@@ -130,5 +168,18 @@ class IvmUtilTest {
         // With nullable keys — result should still be non-nullable due to ifnull/isnull wrapping
         Expression result2 = IvmUtil.buildRowIdHash(ImmutableList.of(intSlot("k1", true)));
         Assertions.assertFalse(result2.nullable());
+    }
+
+    private MTMV mockMtmv(long id, String name) {
+        MTMV mtmv = Mockito.mock(MTMV.class);
+        Mockito.when(mtmv.getId()).thenReturn(id);
+        Mockito.when(mtmv.getName()).thenReturn(name);
+        return mtmv;
+    }
+
+    private OlapTable mockBaseTable(long id) {
+        OlapTable table = Mockito.mock(OlapTable.class);
+        Mockito.when(table.getId()).thenReturn(id);
+        return table;
     }
 }

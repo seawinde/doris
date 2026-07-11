@@ -24,13 +24,36 @@ import java.util.Objects;
 /** Exception for known IVM analysis failures that can be mapped to a failure reason. */
 public class IvmException extends AnalysisException {
     private final IvmFailureReason failureReason;
+    private final IvmPlanSignature currentPlanSignature;
 
     public IvmException(IvmFailureReason failureReason, String message) {
         super(message);
         this.failureReason = Objects.requireNonNull(failureReason, "failureReason can not be null");
+        this.currentPlanSignature = null;
+    }
+
+    public IvmException(IvmFailureReason failureReason, String message, Throwable cause) {
+        super(message, cause);
+        this.failureReason = Objects.requireNonNull(failureReason, "failureReason can not be null");
+        this.currentPlanSignature = null;
+    }
+
+    private IvmException(IvmFailureReason failureReason, String message,
+            IvmPlanSignature currentPlanSignature) {
+        super(message);
+        this.failureReason = Objects.requireNonNull(failureReason, "failureReason can not be null");
+        this.currentPlanSignature = currentPlanSignature;
+    }
+
+    public static IvmException planSignatureMismatch(String message, IvmPlanSignature currentPlanSignature) {
+        return new IvmException(IvmFailureReason.PLAN_SIGNATURE_MISMATCH, message, currentPlanSignature);
     }
 
     public IvmFailureReason getFailureReason() {
         return failureReason;
+    }
+
+    public IvmPlanSignature getCurrentPlanSignature() {
+        return currentPlanSignature;
     }
 }

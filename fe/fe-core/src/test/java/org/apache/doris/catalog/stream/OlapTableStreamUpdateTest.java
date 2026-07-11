@@ -55,4 +55,16 @@ public class OlapTableStreamUpdateTest {
                 () -> update.checkPartitionOffset("test_db", "s1", historicalPartitionTSO, partitionOffset));
         Assertions.assertTrue(exception.getMessage().contains("history offset not consumed"));
     }
+
+    @Test
+    public void testCheckPartitionOffsetRejectsConcurrentOffsetAdvance() {
+        OlapTableStreamUpdate update = new OlapTableStreamUpdate(
+                Collections.singletonMap(1L, 100L), Collections.singletonMap(1L, 200L));
+
+        TransactionCommitFailedException exception = Assertions.assertThrows(TransactionCommitFailedException.class,
+                () -> update.checkPartitionOffset("test_db", "s1", Collections.emptyMap(),
+                        Collections.singletonMap(1L, 150L)));
+
+        Assertions.assertTrue(exception.getMessage().contains("target offset already consumed"));
+    }
 }

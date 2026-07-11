@@ -44,6 +44,10 @@ public class OlapTableStreamUpdate extends AbstractTableStreamUpdate {
         this.next = next;
     }
 
+    public OlapTableStreamUpdate(OlapTableStreamUpdate other) {
+        this(new HashMap<>(other.prev), new HashMap<>(other.next));
+    }
+
     public Map<Long, Long> getNext() {
         return next;
     }

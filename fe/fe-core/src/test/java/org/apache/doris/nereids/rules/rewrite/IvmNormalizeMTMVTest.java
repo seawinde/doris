@@ -30,7 +30,8 @@ import org.apache.doris.catalog.Type;
 import org.apache.doris.catalog.info.TableNameInfo;
 import org.apache.doris.mtmv.ivm.IvmException;
 import org.apache.doris.mtmv.ivm.IvmFailureReason;
-import org.apache.doris.mtmv.ivm.IvmNormalizeResult;
+import org.apache.doris.mtmv.ivm.IvmRewriteContext;
+import org.apache.doris.mtmv.ivm.IvmRewriteResult;
 import org.apache.doris.mtmv.ivm.IvmUtil;
 import org.apache.doris.mtmv.ivm.agg.IvmAggFunctionKind;
 import org.apache.doris.mtmv.ivm.agg.IvmAggMeta;
@@ -73,7 +74,6 @@ import org.apache.doris.nereids.types.LargeIntType;
 import org.apache.doris.nereids.util.MemoTestUtils;
 import org.apache.doris.nereids.util.PlanConstructor;
 import org.apache.doris.qe.ConnectContext;
-import org.apache.doris.qe.SessionVariable;
 import org.apache.doris.thrift.TPartialUpdateNewRowPolicy;
 import org.apache.doris.thrift.TStorageType;
 
@@ -88,10 +88,11 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-class IvmNormalizeMtmvTest {
+class IvmNormalizeMTMVTest {
 
     // DUP_KEYS table — row-id = UuidNumeric(), non-deterministic
     private final LogicalOlapScan scan = PlanConstructor.newLogicalOlapScan(0, "t1", 0);
@@ -103,14 +104,27 @@ class IvmNormalizeMtmvTest {
 
     @Test
     void testGateDisabledKeepsPlanUnchanged() {
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(scan, newJobContext(false));
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(scan, newJobContext(false));
         Assertions.assertSame(scan, result);
+    }
+
+    @Test
+    void testIvmRewriteContextEnablesNormalizeWithoutSessionVariable() {
+        JobContext jobContext = newJobContextForRoot(scan, false, Collections.emptySet(),
+                Optional.of(IvmRewriteContext.normalize()));
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(scan, jobContext);
+
+        Assertions.assertInstanceOf(LogicalProject.class, result);
+        IvmRewriteResult rewriteResult = jobContext.getCascadesContext().getIvmRewriteResult().orElseThrow();
+        Assertions.assertTrue(rewriteResult.isNormalizeRewritten());
+        Assertions.assertSame(result, rewriteResult.getNormalizedPlan());
+        Assertions.assertNotNull(rewriteResult.getPlanSignature());
     }
 
     @Test
     void testScanInjectsRowIdAtIndexZero() {
         JobContext jobContext = newJobContext(true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(scan, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(scan, jobContext);
 
         // scan is wrapped in a project
         Assertions.assertInstanceOf(LogicalProject.class, result);
@@ -127,10 +141,10 @@ class IvmNormalizeMtmvTest {
         Alias rowIdAlias = (Alias) project.getProjects().get(0);
         Assertions.assertInstanceOf(UuidNumeric.class, rowIdAlias.child());
 
-        // IvmNormalizeResult records non-deterministic for DUP_KEYS
-        IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
-        Assertions.assertEquals(1, normalizeResult.getRowIdDeterminism().size());
-        Assertions.assertFalse(normalizeResult.getRowIdDeterminism().values().iterator().next());
+        // IvmRewriteResult records non-deterministic for DUP_KEYS
+        IvmRewriteResult rewriteResult = jobContext.getCascadesContext().getIvmRewriteResult().get();
+        Assertions.assertEquals(1, rewriteResult.getRowIdDeterminism().size());
+        Assertions.assertFalse(rewriteResult.getRowIdDeterminism().values().iterator().next());
     }
 
     @Test
@@ -138,7 +152,7 @@ class IvmNormalizeMtmvTest {
         Slot slot = scan.getOutput().get(0);
         LogicalProject<?> project = new LogicalProject<>(ImmutableList.of(slot), scan);
 
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(project, newJobContext(true));
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(project, newJobContext(true));
 
         // outer project has row-id at index 0
         Assertions.assertInstanceOf(LogicalProject.class, result);
@@ -156,7 +170,7 @@ class IvmNormalizeMtmvTest {
         Slot slot = scan.getOutput().get(0);
         LogicalProject<?> project = new LogicalProject<>(ImmutableList.of(placeholder, slot), scan);
 
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(project, newJobContext(true));
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(project, newJobContext(true));
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
         LogicalProject<?> rewrittenProject = (LogicalProject<?>) result;
@@ -188,7 +202,7 @@ class IvmNormalizeMtmvTest {
                 DMLCommandType.NONE,
                 projectWithPlaceholder);
 
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(sink, newJobContextForRoot(sink, true));
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(sink, newJobContextForRoot(sink, true));
 
         Assertions.assertInstanceOf(LogicalOlapTableSink.class, result);
         LogicalOlapTableSink<?> rewrittenSink = (LogicalOlapTableSink<?>) result;
@@ -221,7 +235,7 @@ class IvmNormalizeMtmvTest {
                 DMLCommandType.NONE,
                 scan);
 
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(sink, newJobContextForRoot(sink, true));
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(sink, newJobContextForRoot(sink, true));
 
         Assertions.assertInstanceOf(LogicalOlapTableSink.class, result);
         LogicalOlapTableSink<?> rewrittenSink = (LogicalOlapTableSink<?>) result;
@@ -244,12 +258,12 @@ class IvmNormalizeMtmvTest {
                 PlanConstructor.getNextRelationId(), mowTable, ImmutableList.of("db"));
 
         JobContext jobContext = newJobContextForScan(mowScan, true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(mowScan, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(mowScan, jobContext);
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
         Assertions.assertEquals(Column.IVM_ROW_ID_COL, result.getOutput().get(0).getName());
-        IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
-        Assertions.assertTrue(normalizeResult.getRowIdDeterminism().values().iterator().next());
+        IvmRewriteResult rewriteResult = jobContext.getCascadesContext().getIvmRewriteResult().get();
+        Assertions.assertTrue(rewriteResult.getRowIdDeterminism().values().iterator().next());
     }
 
     @Test
@@ -261,7 +275,7 @@ class IvmNormalizeMtmvTest {
                 PlanConstructor.getNextRelationId(), morTable, ImmutableList.of("db"));
 
         assertIvmException(IvmFailureReason.PLAN_PATTERN_UNSUPPORTED,
-                () -> new IvmNormalizeMtmv().rewriteRoot(morScan, newJobContextForScan(morScan, true)));
+                () -> new IvmNormalizeMTMV().rewriteRoot(morScan, newJobContextForScan(morScan, true)));
     }
 
     @Test
@@ -272,7 +286,7 @@ class IvmNormalizeMtmvTest {
                 PlanConstructor.getNextRelationId(), aggTable, ImmutableList.of("db"));
 
         assertIvmException(IvmFailureReason.PLAN_PATTERN_UNSUPPORTED,
-                () -> new IvmNormalizeMtmv().rewriteRoot(aggScan, newJobContextForScan(aggScan, true)));
+                () -> new IvmNormalizeMTMV().rewriteRoot(aggScan, newJobContextForScan(aggScan, true)));
     }
 
     @Test
@@ -283,7 +297,7 @@ class IvmNormalizeMtmvTest {
 
         JobContext jobContext = newJobContextForRoot(aggScan, true,
                 Collections.singleton(new TableNameInfo("internal", "test", "agg")));
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(aggScan, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(aggScan, jobContext);
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
         LogicalProject<?> project = (LogicalProject<?>) result;
@@ -293,8 +307,8 @@ class IvmNormalizeMtmvTest {
         Assertions.assertEquals(
                 IvmUtil.buildRowIdHash(ImmutableList.of(aggScan.getOutput().get(0))).toSql(),
                 rowIdAlias.child().toSql());
-        IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
-        Assertions.assertTrue(normalizeResult.getRowIdDeterminism().values().iterator().next());
+        IvmRewriteResult rewriteResult = jobContext.getCascadesContext().getIvmRewriteResult().get();
+        Assertions.assertTrue(rewriteResult.getRowIdDeterminism().values().iterator().next());
     }
 
     @Test
@@ -303,7 +317,7 @@ class IvmNormalizeMtmvTest {
         LogicalOlapScan aggScan = new LogicalOlapScan(
                 PlanConstructor.getNextRelationId(), aggTable, ImmutableList.of("test"));
 
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(aggScan, newJobContextForRoot(aggScan, true,
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(aggScan, newJobContextForRoot(aggScan, true,
                 Collections.singleton(new TableNameInfo("internal", "test", "agg_value_check"))));
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
@@ -326,15 +340,15 @@ class IvmNormalizeMtmvTest {
 
         JobContext jobContext = newJobContextForRoot(mowScan, true,
                 Collections.singleton(new TableNameInfo("internal", "test", "excluded_mow")));
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(mowScan, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(mowScan, jobContext);
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
         LogicalProject<?> project = (LogicalProject<?>) result;
         Alias rowIdAlias = (Alias) project.getProjects().get(0);
         // Excluded MOW table should still compute deterministic row-id from unique key hash
         Assertions.assertInstanceOf(MurmurHash3128.class, rowIdAlias.child());
-        IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
-        Assertions.assertTrue(normalizeResult.getRowIdDeterminism().values().iterator().next());
+        IvmRewriteResult rewriteResult = jobContext.getCascadesContext().getIvmRewriteResult().get();
+        Assertions.assertTrue(rewriteResult.getRowIdDeterminism().values().iterator().next());
     }
 
     @Test
@@ -344,7 +358,7 @@ class IvmNormalizeMtmvTest {
                 PlanConstructor.getNextRelationId(), noBinlogTable, ImmutableList.of("db"));
 
         IvmException exception = Assertions.assertThrows(IvmException.class,
-                () -> new IvmNormalizeMtmv().rewriteRoot(noBinlogScan,
+                () -> new IvmNormalizeMTMV().rewriteRoot(noBinlogScan,
                         newJobContextForRoot(noBinlogScan, true, Collections.emptySet())));
         Assertions.assertEquals(IvmFailureReason.BINLOG_NOT_ENABLED, exception.getFailureReason());
         Assertions.assertTrue(exception.getMessage().contains("no_binlog"));
@@ -358,7 +372,7 @@ class IvmNormalizeMtmvTest {
                 PlanConstructor.getNextRelationId(), ccrBinlogTable, ImmutableList.of("db"));
 
         IvmException exception = Assertions.assertThrows(IvmException.class,
-                () -> new IvmNormalizeMtmv().rewriteRoot(ccrBinlogScan,
+                () -> new IvmNormalizeMTMV().rewriteRoot(ccrBinlogScan,
                         newJobContextForRoot(ccrBinlogScan, true, Collections.emptySet())));
         Assertions.assertEquals(IvmFailureReason.BINLOG_NOT_ENABLED, exception.getFailureReason());
         Assertions.assertTrue(exception.getMessage().contains("row binlog is not enabled"));
@@ -370,7 +384,7 @@ class IvmNormalizeMtmvTest {
         LogicalOlapScan aggScan = new LogicalOlapScan(
                 PlanConstructor.getNextRelationId(), aggTable, ImmutableList.of("test"));
 
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(aggScan, newJobContextForRoot(aggScan, true,
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(aggScan, newJobContextForRoot(aggScan, true,
                 Collections.singleton(new TableNameInfo("internal", "test", "excluded_no_binlog"))));
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
@@ -382,7 +396,7 @@ class IvmNormalizeMtmvTest {
         LogicalSort<Plan> sort = new LogicalSort<>(ImmutableList.of(), scan);
 
         assertIvmException(IvmFailureReason.PLAN_PATTERN_UNSUPPORTED,
-                () -> new IvmNormalizeMtmv().rewriteRoot(sort, newJobContext(true)));
+                () -> new IvmNormalizeMTMV().rewriteRoot(sort, newJobContext(true)));
     }
 
     @Test
@@ -392,25 +406,25 @@ class IvmNormalizeMtmvTest {
         LogicalProject<?> project = new LogicalProject<>(ImmutableList.of(slot), sort);
 
         assertIvmException(IvmFailureReason.PLAN_PATTERN_UNSUPPORTED,
-                () -> new IvmNormalizeMtmv().rewriteRoot(project, newJobContext(true)));
+                () -> new IvmNormalizeMTMV().rewriteRoot(project, newJobContext(true)));
     }
 
     @Test
-    void testNormalizedPlanStoredInIvmNormalizeResult() {
+    void testNormalizedPlanStoredInIvmRewriteResult() {
         JobContext jobContext = newJobContext(true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(scan, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(scan, jobContext);
 
-        IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
-        Assertions.assertNotNull(normalizeResult.getNormalizedPlan());
-        Assertions.assertSame(result, normalizeResult.getNormalizedPlan());
+        IvmRewriteResult rewriteResult = jobContext.getCascadesContext().getIvmRewriteResult().get();
+        Assertions.assertNotNull(rewriteResult.getNormalizedPlan());
+        Assertions.assertSame(result, rewriteResult.getNormalizedPlan());
     }
 
     @Test
     void testIdempotencyGuardSkipsSecondRewrite() {
         JobContext jobContext = newJobContext(true);
-        Plan firstResult = new IvmNormalizeMtmv().rewriteRoot(scan, jobContext);
+        Plan firstResult = new IvmNormalizeMTMV().rewriteRoot(scan, jobContext);
         // Second rewrite on the same CascadesContext should return root unchanged
-        Plan secondResult = new IvmNormalizeMtmv().rewriteRoot(firstResult, jobContext);
+        Plan secondResult = new IvmNormalizeMTMV().rewriteRoot(firstResult, jobContext);
         Assertions.assertSame(firstResult, secondResult);
     }
 
@@ -444,7 +458,7 @@ class IvmNormalizeMtmvTest {
     void testGroupedAggInjectsRowIdAndHiddenColumns() {
         LogicalAggregate<Plan> agg = buildGroupedAgg();
         JobContext jobContext = newJobContextForRoot(agg, true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(agg, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(agg, jobContext);
 
         // Result is a Project wrapping the modified Aggregate
         Assertions.assertInstanceOf(LogicalProject.class, result);
@@ -466,9 +480,9 @@ class IvmNormalizeMtmvTest {
         Alias rowIdAlias = (Alias) topProject.getProjects().get(0);
         Assertions.assertInstanceOf(MurmurHash3128.class, rowIdAlias.child());
 
-        // IvmNormalizeResult has aggMeta
-        IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
-        IvmAggMeta aggMeta = normalizeResult.getAggMeta();
+        // IvmRewriteResult has aggMeta
+        IvmRewriteResult rewriteResult = jobContext.getCascadesContext().getIvmRewriteResult().get();
+        IvmAggMeta aggMeta = rewriteResult.getAggMeta();
         Assertions.assertNotNull(aggMeta);
         Assertions.assertFalse(aggMeta.isScalarAgg());
         Assertions.assertEquals(1, aggMeta.getGroupKeySlots().size());
@@ -485,7 +499,7 @@ class IvmNormalizeMtmvTest {
         Assertions.assertNotNull(target.getHiddenStateSlot(IvmAggStateKey.COUNT));
 
         // Row-id determinism: grouped agg → deterministic
-        Assertions.assertTrue(normalizeResult.isDeterministic(rowIdAlias.toSlot()));
+        Assertions.assertTrue(rewriteResult.isDeterministic(rowIdAlias.toSlot()));
     }
 
     @Test
@@ -506,7 +520,7 @@ class IvmNormalizeMtmvTest {
                 java.util.Optional.of(repeat),
                 project);
 
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(agg, newJobContextForRoot(agg, true));
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(agg, newJobContextForRoot(agg, true));
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
         LogicalProject<?> topProject = (LogicalProject<?>) result;
@@ -523,7 +537,7 @@ class IvmNormalizeMtmvTest {
     void testScalarAggRowIdIsZeroConstant() {
         LogicalAggregate<Plan> agg = buildScalarAgg();
         JobContext jobContext = newJobContextForRoot(agg, true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(agg, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(agg, jobContext);
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
         LogicalProject<?> topProject = (LogicalProject<?>) result;
@@ -534,8 +548,8 @@ class IvmNormalizeMtmvTest {
         Assertions.assertEquals(BigInteger.ZERO, ((LargeIntLiteral) rowIdAlias.child()).getValue());
 
         // IvmAggMeta: scalar, no group keys
-        IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
-        IvmAggMeta aggMeta = normalizeResult.getAggMeta();
+        IvmRewriteResult rewriteResult = jobContext.getCascadesContext().getIvmRewriteResult().get();
+        IvmAggMeta aggMeta = rewriteResult.getAggMeta();
         Assertions.assertTrue(aggMeta.isScalarAgg());
         Assertions.assertTrue(aggMeta.getGroupKeySlots().isEmpty());
         Assertions.assertEquals(1, aggMeta.getAggTargets().size());
@@ -544,7 +558,7 @@ class IvmNormalizeMtmvTest {
         Assertions.assertTrue(aggMeta.getAggTargets().get(0).getExprArgs().isEmpty());
 
         // Row-id determinism: scalar agg → non-deterministic
-        Assertions.assertFalse(normalizeResult.getRowIdDeterminism().values().iterator().next());
+        Assertions.assertFalse(rewriteResult.getRowIdDeterminism().values().iterator().next());
     }
 
     @Test
@@ -563,10 +577,10 @@ class IvmNormalizeMtmvTest {
                 groupBy, outputs, true, java.util.Optional.empty(), scan);
 
         JobContext jobContext = newJobContextForRoot(agg, true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(agg, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(agg, jobContext);
 
-        IvmNormalizeResult normalizeResult = jobContext.getCascadesContext().getIvmNormalizeResult().get();
-        IvmAggMeta aggMeta = normalizeResult.getAggMeta();
+        IvmRewriteResult rewriteResult = jobContext.getCascadesContext().getIvmRewriteResult().get();
+        IvmAggMeta aggMeta = rewriteResult.getAggMeta();
         Assertions.assertEquals(3, aggMeta.getAggTargets().size());
 
         // ordinal 0: COUNT(*) → no hidden columns
@@ -610,9 +624,9 @@ class IvmNormalizeMtmvTest {
                 ImmutableList.of(), outputs, true, java.util.Optional.empty(), scan);
 
         JobContext jobContext = newJobContextForRoot(agg, true);
-        new IvmNormalizeMtmv().rewriteRoot(agg, jobContext);
+        new IvmNormalizeMTMV().rewriteRoot(agg, jobContext);
 
-        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmNormalizeResult().get().getAggMeta();
+        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmRewriteResult().get().getAggMeta();
         Assertions.assertEquals(IvmAggFunctionKind.COUNT, aggMeta.getAggTargets().get(0).getFunctionKind());
         Assertions.assertFalse(aggMeta.getAggTargets().get(0).isCountStar());
         Assertions.assertEquals(1, aggMeta.getAggTargets().get(0).getExprArgs().size());
@@ -625,7 +639,7 @@ class IvmNormalizeMtmvTest {
                 ImmutableSet.of(BooleanLiteral.TRUE), agg);
 
         assertIvmException(IvmFailureReason.AGG_UNSUPPORTED,
-                () -> new IvmNormalizeMtmv().rewriteRoot(filter, newJobContextForRoot(filter, true)));
+                () -> new IvmNormalizeMTMV().rewriteRoot(filter, newJobContextForRoot(filter, true)));
     }
 
     @Test
@@ -637,7 +651,7 @@ class IvmNormalizeMtmvTest {
                 ImmutableList.of(), outputs, true, java.util.Optional.empty(), scan);
 
         assertIvmException(IvmFailureReason.AGG_UNSUPPORTED,
-                () -> new IvmNormalizeMtmv().rewriteRoot(agg, newJobContextForRoot(agg, true)));
+                () -> new IvmNormalizeMTMV().rewriteRoot(agg, newJobContextForRoot(agg, true)));
     }
 
     @Test
@@ -649,7 +663,7 @@ class IvmNormalizeMtmvTest {
                 ImmutableList.of(), outputs, true, java.util.Optional.empty(), scan);
 
         assertIvmException(IvmFailureReason.AGG_UNSUPPORTED,
-                () -> new IvmNormalizeMtmv().rewriteRoot(agg, newJobContextForRoot(agg, true)));
+                () -> new IvmNormalizeMTMV().rewriteRoot(agg, newJobContextForRoot(agg, true)));
     }
 
     @Test
@@ -663,11 +677,11 @@ class IvmNormalizeMtmvTest {
                 groupBy, outputs, true, java.util.Optional.empty(), scan);
 
         JobContext jobContext = newJobContextForRoot(agg, true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(agg, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(agg, jobContext);
 
         // Normalization should succeed; no hidden MIN column — only hidden COUNT
         Assertions.assertInstanceOf(LogicalProject.class, result);
-        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmNormalizeResult().get().getAggMeta();
+        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmRewriteResult().get().getAggMeta();
         Assertions.assertNotNull(aggMeta);
         Assertions.assertEquals(1, aggMeta.getAggTargets().size());
         IvmAggTarget target = aggMeta.getAggTargets().get(0);
@@ -692,10 +706,10 @@ class IvmNormalizeMtmvTest {
                 groupBy, outputs, true, java.util.Optional.empty(), scan);
 
         JobContext jobContext = newJobContextForRoot(agg, true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(agg, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(agg, jobContext);
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
-        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmNormalizeResult().get().getAggMeta();
+        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmRewriteResult().get().getAggMeta();
         Assertions.assertNotNull(aggMeta);
         Assertions.assertEquals(1, aggMeta.getAggTargets().size());
         IvmAggTarget target = aggMeta.getAggTargets().get(0);
@@ -722,10 +736,10 @@ class IvmNormalizeMtmvTest {
                 groupBy, outputs, true, java.util.Optional.empty(), scan);
 
         JobContext jobContext = newJobContextForRoot(agg, true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(agg, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(agg, jobContext);
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
-        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmNormalizeResult().get().getAggMeta();
+        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmRewriteResult().get().getAggMeta();
         Assertions.assertNotNull(aggMeta);
         Assertions.assertEquals(2, aggMeta.getAggTargets().size());
 
@@ -755,11 +769,11 @@ class IvmNormalizeMtmvTest {
                 groupBy, outputs, true, java.util.Optional.empty(), scan);
 
         JobContext jobContext = newJobContextForRoot(agg, true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(agg, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(agg, jobContext);
 
         // Normalization should succeed with zero agg targets
         Assertions.assertInstanceOf(LogicalProject.class, result);
-        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmNormalizeResult().get().getAggMeta();
+        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmRewriteResult().get().getAggMeta();
         Assertions.assertNotNull(aggMeta);
         Assertions.assertEquals(0, aggMeta.getAggTargets().size());
         Assertions.assertNotNull(aggMeta.getGroupCountSlot());
@@ -787,11 +801,11 @@ class IvmNormalizeMtmvTest {
                 groupBy, outputs, true, java.util.Optional.empty(), scan);
 
         JobContext jobContext = newJobContextForRoot(agg, true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(agg, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(agg, jobContext);
 
         // Normalization should succeed
         Assertions.assertInstanceOf(LogicalProject.class, result);
-        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmNormalizeResult().get().getAggMeta();
+        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmRewriteResult().get().getAggMeta();
         Assertions.assertNotNull(aggMeta);
         Assertions.assertEquals(1, aggMeta.getAggTargets().size());
 
@@ -818,10 +832,10 @@ class IvmNormalizeMtmvTest {
                 groupBy, outputs, true, java.util.Optional.empty(), scan);
 
         JobContext jobContext = newJobContextForRoot(agg, true);
-        Plan result = new IvmNormalizeMtmv().rewriteRoot(agg, jobContext);
+        Plan result = new IvmNormalizeMTMV().rewriteRoot(agg, jobContext);
 
         Assertions.assertInstanceOf(LogicalProject.class, result);
-        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmNormalizeResult().get().getAggMeta();
+        IvmAggMeta aggMeta = jobContext.getCascadesContext().getIvmRewriteResult().get().getAggMeta();
         Assertions.assertNotNull(aggMeta);
         Assertions.assertEquals(2, aggMeta.getAggTargets().size());
 
@@ -852,17 +866,23 @@ class IvmNormalizeMtmvTest {
     }
 
     private JobContext newJobContextForRoot(Plan root, boolean enableIvmNormalRewrite) {
-        return newJobContextForRoot(root, enableIvmNormalRewrite, Collections.emptySet());
+        return newJobContextForRoot(root, enableIvmNormalRewrite, Collections.emptySet(), Optional.empty());
     }
 
     private JobContext newJobContextForRoot(Plan root, boolean enableIvmNormalRewrite,
             Set<TableNameInfo> excludedTriggerTables) {
+        return newJobContextForRoot(root, enableIvmNormalRewrite, excludedTriggerTables, Optional.empty());
+    }
+
+    private JobContext newJobContextForRoot(Plan root, boolean enableIvmNormalRewrite,
+            Set<TableNameInfo> excludedTriggerTables, Optional<IvmRewriteContext> ivmRewriteContext) {
         ConnectContext connectContext = MemoTestUtils.createConnectContext();
-        SessionVariable sessionVariable = new SessionVariable();
-        sessionVariable.setEnableIvmNormalRewrite(enableIvmNormalRewrite);
-        connectContext.setSessionVariable(sessionVariable);
         StatementContext statementContext = new StatementContext(connectContext, null);
         statementContext.setExcludedTriggerTables(excludedTriggerTables);
+        Optional<IvmRewriteContext> effectiveIvmRewriteContext = ivmRewriteContext.isPresent()
+                ? ivmRewriteContext
+                : enableIvmNormalRewrite ? Optional.of(IvmRewriteContext.normalize()) : Optional.empty();
+        statementContext.setIvmRewriteContext(effectiveIvmRewriteContext);
         CascadesContext cascadesContext = CascadesContext.initContext(statementContext, root, PhysicalProperties.ANY);
         return new JobContext(cascadesContext, PhysicalProperties.ANY);
     }

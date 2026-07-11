@@ -275,13 +275,13 @@ public class AlterMTMVTest extends TestWithFeService {
                 .getDb("alter_ivm_test").get()
                 .getTableOrMetaException("ivm_alter_mv");
 
-        // Verify initial state
+        // IVM creation persists the initial normalized-plan signature.
         IvmInfo initialInfo = mtmv.getIvmInfo();
-        Assertions.assertFalse(initialInfo.isRunningIvmRefresh());
+        Assertions.assertNotNull(initialInfo.getPlanSignature());
 
-        // Build a modified IvmInfo with runningIvmRefresh=true
+        // Build a modified IvmInfo with planSignature
         IvmInfo newInfo = new IvmInfo();
-        newInfo.setRunningIvmRefresh(true);
+        newInfo.setPlanSignature("sig-1");
 
         // Persist via alterMTMVIvmInfo
         TableNameInfo tableName = new TableNameInfo(mtmv.getQualifiedDbName(), mtmv.getName());
@@ -289,15 +289,15 @@ public class AlterMTMVTest extends TestWithFeService {
 
         // Verify the MTMV's IvmInfo was updated
         IvmInfo updatedInfo = mtmv.getIvmInfo();
-        Assertions.assertTrue(updatedInfo.isRunningIvmRefresh());
+        Assertions.assertEquals("sig-1", updatedInfo.getPlanSignature());
 
         // Reset it back and verify
         IvmInfo resetInfo = new IvmInfo();
-        resetInfo.setRunningIvmRefresh(false);
+        resetInfo.setPlanSignature("sig-2");
         Env.getCurrentEnv().alterMTMVIvmInfo(tableName, resetInfo);
 
         IvmInfo finalInfo = mtmv.getIvmInfo();
-        Assertions.assertFalse(finalInfo.isRunningIvmRefresh());
+        Assertions.assertEquals("sig-2", finalInfo.getPlanSignature());
     }
 
     @Test
@@ -320,13 +320,46 @@ public class AlterMTMVTest extends TestWithFeService {
         MTMV mtmv = (MTMV) Env.getCurrentInternalCatalog()
                 .getDb("stream_test").get()
                 .getTableOrMetaException("stream_mv");
-        String streamName = IvmUtil.streamName(mtmv.getId(), "stream_base");
+        String streamName = IvmUtil.streamName(mtmv,
+                Env.getCurrentInternalCatalog().getDb("stream_test").get()
+                        .getTableOrMetaException("stream_base"));
         org.apache.doris.catalog.TableIf streamTable = Env.getCurrentInternalCatalog()
                 .getDb("stream_test").get()
                 .getTableOrMetaException(streamName);
         Assertions.assertNotNull(streamTable, "Stream should be auto-created for IVM base table");
         Assertions.assertTrue(streamTable instanceof org.apache.doris.catalog.stream.OlapTableStream,
                 "Should be an OlapTableStream");
+    }
+
+    @Test
+    public void testRenamedIncrementalMtmvResolvesAndDropsOriginalStream() throws Exception {
+        Config.enable_table_stream = true;
+        createDatabaseAndUse("stream_rename_test");
+        createTable("CREATE TABLE stream_rename_test.stream_base (k1 int)\n"
+                + "UNIQUE KEY(k1) DISTRIBUTED BY HASH(k1) BUCKETS 1\n"
+                + "PROPERTIES ('replication_num' = '1', 'enable_unique_key_merge_on_write' = 'true',"
+                + " 'binlog.enable' = 'true', 'binlog.need_historical_value' = 'true',"
+                + " 'binlog.format' = 'ROW')");
+        createMvByNereids("CREATE MATERIALIZED VIEW stream_mv_before_rename\n"
+                + "BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL\n"
+                + "DISTRIBUTED BY RANDOM BUCKETS 1 PROPERTIES ('replication_num' = '1')\n"
+                + "AS SELECT k1 FROM stream_base");
+        org.apache.doris.catalog.Database db = Env.getCurrentInternalCatalog()
+                .getDb("stream_rename_test").get();
+        MTMV originalMtmv = (MTMV) db.getTableOrMetaException("stream_mv_before_rename");
+        org.apache.doris.catalog.OlapTable baseTable = (org.apache.doris.catalog.OlapTable)
+                db.getTableOrMetaException("stream_base");
+        String originalStreamName = IvmUtil.streamName(originalMtmv, baseTable);
+        org.apache.doris.catalog.stream.OlapTableStream originalStream =
+                (org.apache.doris.catalog.stream.OlapTableStream)
+                        db.getTableOrMetaException(originalStreamName);
+
+        alterMv("ALTER MATERIALIZED VIEW stream_mv_before_rename RENAME stream_mv_after_rename");
+        MTMV renamedMtmv = (MTMV) db.getTableOrMetaException("stream_mv_after_rename");
+
+        Assertions.assertSame(originalStream, IvmUtil.getIvmStream(renamedMtmv, baseTable));
+        dropMvByNereids("DROP MATERIALIZED VIEW stream_mv_after_rename");
+        Assertions.assertNull(db.getTableNullable(originalStreamName));
     }
 
     @Test
@@ -357,7 +390,9 @@ public class AlterMTMVTest extends TestWithFeService {
                 .getTableOrMetaException("excl_stream_mv");
 
         // excl_base1 is excluded → no stream should be created
-        String excludedStreamName = IvmUtil.streamName(mtmv.getId(), "excl_base1");
+        String excludedStreamName = IvmUtil.streamName(mtmv,
+                Env.getCurrentInternalCatalog().getDb("stream_excl_test").get()
+                        .getTableOrMetaException("excl_base1"));
         Assertions.assertThrows(Exception.class,
                 () -> Env.getCurrentInternalCatalog()
                         .getDb("stream_excl_test").get()
@@ -365,7 +400,9 @@ public class AlterMTMVTest extends TestWithFeService {
                 "Excluded table should NOT have a stream auto-created");
 
         // excl_base2 is NOT excluded → stream should exist
-        String includedStreamName = IvmUtil.streamName(mtmv.getId(), "excl_base2");
+        String includedStreamName = IvmUtil.streamName(mtmv,
+                Env.getCurrentInternalCatalog().getDb("stream_excl_test").get()
+                        .getTableOrMetaException("excl_base2"));
         org.apache.doris.catalog.TableIf includedStream = Env.getCurrentInternalCatalog()
                 .getDb("stream_excl_test").get()
                 .getTableOrMetaException(includedStreamName);

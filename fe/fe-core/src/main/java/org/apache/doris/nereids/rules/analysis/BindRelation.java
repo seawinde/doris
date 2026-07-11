@@ -51,6 +51,7 @@ import org.apache.doris.datasource.hive.HMSExternalTable;
 import org.apache.doris.datasource.hive.HMSExternalTable.DLAType;
 import org.apache.doris.datasource.iceberg.IcebergExternalTable;
 import org.apache.doris.datasource.systable.SysTableResolver;
+import org.apache.doris.mtmv.BaseTableInfo;
 import org.apache.doris.nereids.CTEContext;
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.SqlCacheContext;
@@ -248,6 +249,13 @@ public class BindRelation extends OneAnalysisRuleFactory {
             table = new RowBinlogTableWrapper((OlapTable) table);
         } else if (unboundRelation.getScanParams() != null) {
             unboundRelation.getScanParams().validateOlapTable();
+        }
+        if (!isChangeRead) {
+            Optional<Map<Long, Pair<Long, Long>>> tsoRange =
+                    cascadesContext.getStatementContext().getMtmvOlapTableTsoRange(new BaseTableInfo(table));
+            if (tsoRange.isPresent()) {
+                table = new OlapTableWrapper((OlapTable) table, tsoRange.get());
+            }
         }
         if (!CollectionUtils.isEmpty(partIds) && !unboundRelation.getIndexName().isPresent()) {
             scan = new LogicalOlapScan(unboundRelation.getRelationId(),

@@ -19,51 +19,50 @@ package org.apache.doris.mtmv.ivm;
 
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.MTMV;
-import org.apache.doris.catalog.OlapTable;
-import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.info.TableNameInfo;
-import org.apache.doris.mtmv.BaseTableInfo;
-import org.apache.doris.mtmv.MTMVAnalyzeQueryInfo;
+import org.apache.doris.common.Config;
+import org.apache.doris.common.util.DebugPointUtil;
+import org.apache.doris.datasource.InternalCatalog;
+import org.apache.doris.job.exception.JobException;
 import org.apache.doris.mtmv.MTMVPlanUtil;
-import org.apache.doris.mtmv.MTMVRelation;
-import org.apache.doris.mtmv.MTMVUtil;
 import org.apache.doris.nereids.StatementContext;
-import org.apache.doris.nereids.exceptions.AnalysisException;
+import org.apache.doris.nereids.analyzer.UnboundTableSink;
+import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.trees.plans.Plan;
-import org.apache.doris.nereids.trees.plans.commands.Command;
+import org.apache.doris.nereids.trees.plans.algebra.Sink;
+import org.apache.doris.nereids.trees.plans.commands.info.DMLCommandType;
+import org.apache.doris.nereids.trees.plans.commands.insert.InsertIntoTableCommand;
+import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.OriginStatement;
+import org.apache.doris.thrift.TPartialUpdateNewRowPolicy;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableList;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.Collections;
-import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
+import java.util.Optional;
 
 /**
  * Minimal orchestration entry point for incremental refresh.
  */
 public class IvmRefreshManager {
     private static final Logger LOG = LogManager.getLogger(IvmRefreshManager.class);
-    private final IvmDeltaExecutor deltaExecutor;
-    private IvmPlanSignature currentPlanSignatureForFallback;
-
-    public IvmRefreshManager() {
-        this(new IvmDeltaExecutor());
-    }
-
-    @VisibleForTesting
-    IvmRefreshManager(IvmDeltaExecutor deltaExecutor) {
-        this.deltaExecutor = Objects.requireNonNull(deltaExecutor, "deltaExecutor can not be null");
-    }
+    public static final String DEBUG_POINT_FORCE_FALLBACK_REASON =
+            "IvmRefreshManager.doRefresh.force_fallback_reason";
 
     public IvmRefreshResult doRefresh(MTMV mtmv) {
         Objects.requireNonNull(mtmv, "mtmv can not be null");
-        currentPlanSignatureForFallback = null;
+        String forceFallbackReason = DebugPointUtil.getDebugParamOrDefault(
+                DEBUG_POINT_FORCE_FALLBACK_REASON, "reason", "");
+        if (!forceFallbackReason.isEmpty()) {
+            IvmFailureReason reason = IvmFailureReason.valueOf(forceFallbackReason);
+            return IvmRefreshResult.fallback(reason, "forced by debug point");
+        }
         IvmRefreshResult precheckResult = precheck(mtmv);
         if (!precheckResult.isSuccess()) {
             LOG.warn("IVM precheck failed for mv={}, result={}", mtmv.getName(), precheckResult);
@@ -78,21 +77,26 @@ public class IvmRefreshManager {
             LOG.warn("IVM context build failed for mv={}, result={}", mtmv.getName(), result);
             return result;
         }
-        return doRefreshInternal(context);
+        try {
+            return doRefreshInternal(context);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("IVM refresh execution failed for mv=" + mtmv.getName(), e);
+        }
     }
 
     @VisibleForTesting
     IvmRefreshResult precheck(MTMV mtmv) {
         Objects.requireNonNull(mtmv, "mtmv can not be null");
-        if (mtmv.getIvmInfo().isRunningIvmRefresh()) {
-            return IvmRefreshResult.fallback(IvmFailureReason.PREVIOUS_RUN_INCOMPLETE,
-                    "A previous incremental refresh did not complete; full refresh is required");
-        }
         if (mtmv.getIvmInfo().isBinlogBroken()) {
             return IvmRefreshResult.fallback(IvmFailureReason.BINLOG_BROKEN,
-                    "Stream binlog is marked as broken");
+                    "IVM stream baseline is marked as broken");
         }
-        // return checkStreamSupport(mtmv);
+        if (!Config.enable_table_stream) {
+            return IvmRefreshResult.fallback(IvmFailureReason.STREAM_UNSUPPORTED,
+                    "Table stream is disabled");
+        }
         return IvmRefreshResult.success();
     }
 
@@ -103,249 +107,110 @@ public class IvmRefreshManager {
         return new IvmRefreshContext(mtmv, connectContext);
     }
 
-    @VisibleForTesting
-    List<Command> analyzeDeltaCommands(IvmRefreshContext context) throws Exception {
-        MTMV mtmv = context.getMtmv();
-        MTMVAnalyzeQueryInfo queryInfo = MTMVPlanUtil.analyzeQueryWithSql(
-                mtmv, context.getConnectContext(), true);
-        validatePlanSignature(mtmv, queryInfo);
-        IvmNormalizeResult normalizeResult = queryInfo.getIvmNormalizeResult();
-        Plan normalizedPlan = queryInfo.getIvmNormalizedPlan();
-        if (normalizedPlan == null) {
-            return Collections.emptyList();
-        }
-
-        IvmRefreshContext rewriteCtx = new IvmRefreshContext(
-                mtmv, context.getConnectContext(), normalizeResult);
-        return new IvmDeltaRewriter().rewrite(normalizedPlan, rewriteCtx);
-    }
-
-    /**
-     * Builds the IVM normalized plan and all dry-run delta plans for EXPLAIN REFRESH.
-     * This method does not mutate persisted IVM state and intentionally includes
-     * no-op streams so users can inspect every delta plan shape.
-     */
-    public IvmRefreshExplainResult explainRefresh(MTMV mtmv) throws Exception {
-        Objects.requireNonNull(mtmv, "mtmv can not be null");
-        IvmRefreshContext context = buildRefreshContext(mtmv);
-        MTMVAnalyzeQueryInfo queryInfo = MTMVPlanUtil.analyzeQueryWithSql(
-                mtmv, context.getConnectContext(), true);
-        validatePlanSignature(mtmv, queryInfo);
-        IvmNormalizeResult normalizeResult = queryInfo.getIvmNormalizeResult();
-        Plan normalizedPlan = queryInfo.getIvmNormalizedPlan();
-        if (normalizedPlan == null) {
-            throw new AnalysisException("IVM normalized plan is empty");
-        }
-
-        IvmRefreshContext rewriteCtx = new IvmRefreshContext(
-                mtmv, context.getConnectContext(), normalizeResult);
-        IvmDeltaRewriter rewriter = new IvmDeltaRewriter();
-        Plan mergedDeltaPlan = rewriter.generateMergedDeltaPlan(normalizedPlan, rewriteCtx,
-                scan -> rewriter.isExcludedTriggerTable(scan, mtmv.getExcludedTriggerTables()), true);
-        return new IvmRefreshExplainResult(normalizedPlan, mergedDeltaPlan);
-    }
-
-    @VisibleForTesting
-    void validatePlanSignature(MTMV mtmv, MTMVAnalyzeQueryInfo queryInfo) {
-        IvmNormalizeResult normalizeResult = queryInfo.getIvmNormalizeResult();
-        IvmPlanSignature currentSignature = normalizeResult == null ? null : normalizeResult.getPlanSignature();
-        currentPlanSignatureForFallback = currentSignature;
-        IvmInfo ivmInfo = mtmv.getIvmInfo();
-        String storedSignature = ivmInfo.getPlanSignature();
-        boolean signatureMatched = currentSignature != null
-                && Objects.equals(storedSignature, currentSignature.getSha256());
-        if (signatureMatched) {
-            return;
-        }
-        LOG.info("IVM layout signature mismatch for mv={}, storedSignature={}, currentSignature={}, "
-                        + "currentCanonicalLayout={}",
-                mtmv.getName(), storedSignature,
-                currentSignature == null ? "null" : currentSignature.getSha256(),
-                currentSignature == null ? "null" : currentSignature.getCanonicalString());
-        String detail = "IVM layout signature mismatch for mv=" + mtmv.getName()
-                + ", storedSignature=" + storedSignature
-                + ", currentSignature=" + (currentSignature == null ? "null" : currentSignature.getSha256())
-                + ". Run a full refresh to rebuild IVM layout baseline.";
-        throw new IvmException(IvmFailureReason.PLAN_SIGNATURE_MISMATCH, detail);
-    }
-
-
-    private IvmRefreshResult doRefreshInternal(IvmRefreshContext context) {
+    private IvmRefreshResult doRefreshInternal(IvmRefreshContext context) throws Exception {
         Objects.requireNonNull(context, "context can not be null");
         MTMV mtmv = context.getMtmv();
-
-        // Run Nereids with IVM rewrite enabled — per-pattern delta rules write bundles to CascadesContext
-        List<Command> commands;
         try {
-            commands = analyzeDeltaCommands(context);
+            executeInternalRefresh(context);
         } catch (IvmException e) {
             // Analysis has not written MV data yet, so unsupported IVM patterns
             // can be represented as a fallback result for the task planner. Preserve
             // the typed failure reason so MTMVTask can decide whether ordinary partition
             // fallback is enough or a full layout-baseline rebuild is required.
-            IvmPlanSignature currentSignature = e.getFailureReason() == IvmFailureReason.PLAN_SIGNATURE_MISMATCH
-                    ? currentPlanSignatureForFallback : null;
             IvmRefreshResult result = IvmRefreshResult.fallback(
-                    e.getFailureReason(), e.getMessage(), currentSignature);
-            LOG.warn("IVM plan analysis failed for mv={}, result={}", mtmv.getName(), result, e);
-            return result;
-        } catch (Exception e) {
-            String detail = e.getMessage() != null ? e.getMessage()
-                    : e.getClass().getName() + " (no message)";
-            // Unknown analysis errors are still pre-execution failures. Return a
-            // fallback result instead of throwing so AUTO/INCREMENTAL FALLBACK
-            // can try PARTITIONS/COMPLETE.
-            IvmRefreshResult result = IvmRefreshResult.fallback(
-                    IvmFailureReason.PLAN_PATTERN_UNSUPPORTED, detail);
+                    e.getFailureReason(), e.getMessage(), e.getCurrentPlanSignature());
             LOG.warn("IVM plan analysis failed for mv={}, result={}", mtmv.getName(), result, e);
             return result;
         }
-
-        if (commands == null || commands.isEmpty()) {
-            // All base tables are up to date — no delta to apply. This is a success (no-op).
-            LOG.info("IVM no delta commands for mv={} (all base tables up to date)", mtmv.getName());
-            return IvmRefreshResult.success();
-        }
-
-        // Mark incremental refresh in progress and persist BEFORE execution.
-        // If FE crashes during execution, on restart the flag triggers full refresh.
-        IvmInfo ivmInfo = mtmv.getIvmInfo();
-        ivmInfo.setRunningIvmRefresh(true);
-        persistIvmInfo(mtmv, ivmInfo);
-
-        // Consume one ExprId from the analysis StatementContext to obtain the next safe start
-        // value for execution. This prevents ExprId collisions between plan-embedded ExprIds
-        // (allocated during analyzeDeltaCommandBundles) and new ExprIds allocated during
-        // bundle execution (in a fresh StatementContext). See: apache/doris#58494.
-        // StatementContext may be null in unit-test paths where analyzeDeltaCommandBundles is mocked out;
-        // in that case start from 0 (safe because no real plan ExprIds exist).
-        StatementContext analysisStmtCtx =
-                context.getConnectContext().getStatementContext();
-        int exprIdStart = analysisStmtCtx != null
-                ? analysisStmtCtx.getNextExprId().asInt() : 0;
-        try {
-            deltaExecutor.execute(context, commands, exprIdStart);
-        } catch (Exception e) {
-            // Leave runningIvmRefresh=true — the next task will detect this and
-            // require full refresh recovery, which resets the flag on success.
-            // Do not return a fallback result here: delta commands are executed
-            // one by one and may already have partially modified the MV.
-            String detail = e.getMessage() != null ? e.getMessage()
-                    : e.getClass().getName() + " (no message)";
-            LOG.warn("IVM execution failed for mv={}, detail={}", mtmv.getName(), detail, e);
-            throw new IvmException(IvmFailureClassifier.classifyExecutionFailure(detail)
-                    .orElse(IvmFailureReason.INCREMENTAL_EXECUTION_FAILED), detail);
-        }
-
-        // Advance consumedTso to latestTso for all base tables and clear the flag,
-        // persisting everything in one editlog entry.
-        advanceStreamOffsetAndClearFlag(mtmv);
-
+        // TODO: Split analysis/rewrite failures from execution failures so non-IVM exceptions
+        // can be classified precisely instead of relying on a single catch boundary here.
         return IvmRefreshResult.success();
     }
 
-    /**
-     * After successful bundle execution, advances each base table's stream offset
-     * and clears the runningIvmRefresh flag, then persists via editlog.
-     *
-     * TODO: Implement stream offset advancement via OlapTableStream.unprotectedUpdateStreamUpdate()
-     * once streams are auto-created in Phase 1.
-     */
-    private void advanceStreamOffsetAndClearFlag(MTMV mtmv) {
-        IvmInfo ivmInfo = mtmv.getIvmInfo();
-        // TODO: advance stream offsets for each base table
-        ivmInfo.setRunningIvmRefresh(false);
-        persistIvmInfo(mtmv, ivmInfo);
-    }
-
-    /**
-     * Persists the IvmInfo via the AlterMTMV editlog mechanism.
-     * Package-private so tests can override to avoid Env dependency.
-     */
     @VisibleForTesting
-    void persistIvmInfo(MTMV mtmv, IvmInfo ivmInfo) {
-        TableNameInfo tableName = new TableNameInfo(mtmv.getQualifiedDbName(), mtmv.getName());
-        Env.getCurrentEnv().alterMTMVIvmInfo(tableName, ivmInfo);
-    }
-
-    /**
-     * Resets IVM state after a successful full (COMPLETE) refresh. Called from MTMVTask
-     * when the partition-based refresh succeeds and a previous IVM run left
-     * {@code runningIvmRefresh=true}. Resets each base table's stream offset to the
-     * pre-captured snapshot TSO and clears the flag.
-     *
-     * TODO: Implement stream offset reset via OlapTableStream.unprotectedUpdateStreamUpdate()
-     * once streams are auto-created in Phase 1. For now, just clear the flag.
-     */
-    public static void resetIvmStateAfterFullRefresh(MTMV mtmv,
-            Map<BaseTableInfo, Long> capturedTsos) {
-        IvmInfo ivmInfo = mtmv.getIvmInfo();
-        clearRunningIvmRefreshAfterFullRefresh(ivmInfo);
-        TableNameInfo tableName = new TableNameInfo(mtmv.getQualifiedDbName(), mtmv.getName());
-        Env.getCurrentEnv().alterMTMVIvmInfo(tableName, ivmInfo);
-        LOG.info("IVM state reset after full refresh for mv={}", mtmv.getName());
-    }
-
-    public static void clearRunningIvmRefreshAfterFullRefresh(MTMV mtmv) {
-        IvmInfo ivmInfo = mtmv.getIvmInfo();
-        clearRunningIvmRefreshAfterFullRefresh(ivmInfo);
-        TableNameInfo tableName = new TableNameInfo(mtmv.getQualifiedDbName(), mtmv.getName());
-        Env.getCurrentEnv().alterMTMVIvmInfo(tableName, ivmInfo);
-        LOG.info("IVM running refresh flag cleared after full refresh for mv={}", mtmv.getName());
-    }
-
-    public static void updatePlanSignatureAfterFullRefresh(MTMV mtmv, String planSignature,
-            String canonicalString) {
-        IvmInfo ivmInfo = mtmv.getIvmInfo();
-        ivmInfo.setPlanSignature(planSignature);
-        TableNameInfo tableName = new TableNameInfo(mtmv.getQualifiedDbName(), mtmv.getName());
-        Env.getCurrentEnv().alterMTMVIvmInfo(tableName, ivmInfo);
-        LOG.info("IVM layout signature baseline updated after full refresh for mv={}, signature={}, "
-                        + "canonicalLayout={}",
-                mtmv.getName(), planSignature, canonicalString == null ? "null" : canonicalString);
+    void executeInternalRefresh(IvmRefreshContext context) throws Exception {
+        MTMV mtmv = context.getMtmv();
+        StatementContext statementContext = new StatementContext(
+                context.getConnectContext(), new OriginStatement(mtmv.getQuerySql(), 0));
+        statementContext.setIvmRewriteContext(Optional.of(
+                IvmRewriteContext.incremental(mtmv, false)));
+        InsertIntoTableCommand command = buildInsertCommand(mtmv);
+        MTMVPlanUtil.executeCommand(context.getConnectContext(), command,
+                statementContext, mtmv.getQuerySql());
     }
 
     @VisibleForTesting
-    static void clearRunningIvmRefreshAfterFullRefresh(IvmInfo ivmInfo) {
-        ivmInfo.setRunningIvmRefresh(false);
+    public InsertIntoTableCommand buildInsertCommand(MTMV mtmv) {
+        return buildInsertCommand(parseInsertQueryPlan(mtmv), mtmv);
     }
 
-    // resetIvmStateAfterFullRefresh(IvmInfo, Map) removed — stream offsets are now
-    // reset directly via OlapTableStream.unprotectedUpdateStreamUpdate() in the public
-    // resetIvmStateAfterFullRefresh(MTMV, Map) method.
+    @VisibleForTesting
+    InsertIntoTableCommand buildInsertCommand(LogicalPlan queryPlan, MTMV mtmv) {
+        Objects.requireNonNull(queryPlan, "queryPlan can not be null");
+        Objects.requireNonNull(mtmv, "mtmv can not be null");
+        List<String> sinkColumns = new ArrayList<>(mtmv.getInsertedColumnNames());
+        List<String> mvNameParts = ImmutableList.of(
+                InternalCatalog.INTERNAL_CATALOG_NAME,
+                mtmv.getQualifiedDbName(),
+                mtmv.getName());
+        UnboundTableSink<LogicalPlan> sink = new UnboundTableSink<>(
+                mvNameParts, sinkColumns, ImmutableList.of(),
+                false, ImmutableList.of(), false,
+                TPartialUpdateNewRowPolicy.APPEND, DMLCommandType.INSERT,
+                Optional.empty(), Optional.empty(), queryPlan);
+        return new InsertIntoTableCommand(sink, Optional.empty(), Optional.empty(), Optional.empty());
+    }
 
-    /**
-     * Captures the current visible TSO for each base table. Should be called
-     * BEFORE a full refresh executes, so the captured values represent the snapshot
-     * that the refresh will read. On failure, logs a warning and returns an empty map.
-     *
-     * TODO: Update to get table list from MTMV relation (not IvmStreamRef) once
-     * streams are auto-created in Phase 1.
-     */
-    public static Map<BaseTableInfo, Long> captureBaseTableTsos(MTMV mtmv) {
-        Map<BaseTableInfo, Long> result = new HashMap<>();
-        Set<BaseTableInfo> baseTables = getBaseTablesForIvmState(mtmv);
-        if (baseTables == null || baseTables.isEmpty()) {
-            return result;
+    private LogicalPlan parseInsertQueryPlan(MTMV mtmv) {
+        Plan plan = new NereidsParser().parseSingle(mtmv.getQuerySql());
+        if (plan instanceof Sink) {
+            plan = plan.child(0);
         }
-        for (BaseTableInfo tableInfo : baseTables) {
-            try {
-                TableIf table = MTMVUtil.getTable(tableInfo);
-                if (table instanceof OlapTable) {
-                    result.put(tableInfo, ((OlapTable) table).getVisibleTso());
-                }
-            } catch (Exception e) {
-                LOG.warn("IVM: failed to capture TSO for table {} before full refresh: {}. "
-                        + "IVM state reset will be skipped.", tableInfo, e.getMessage());
-                return Collections.emptyMap();
+        return (LogicalPlan) plan;
+    }
+
+    /** Publishes the new IVM baseline only after all full-refresh transactions have succeeded. */
+    public static void finishIvmFullRefresh(MTMV mtmv, long expectedGeneration,
+            IvmPlanSignature planSignature) throws JobException {
+        mtmv.writeMvLock();
+        try {
+            if (expectedGeneration != mtmv.getIvmBinlogBrokenGeneration()) {
+                throw new JobException("Base table metadata changed during COMPLETE refresh, mv="
+                        + mtmv.getName());
             }
+            IvmInfo ivmInfo = new IvmInfo(mtmv.getIvmInfo());
+            if (planSignature != null) {
+                ivmInfo.setPlanSignature(planSignature.getSha256());
+            }
+            ivmInfo.setBinlogBroken(false);
+            persistIvmInfo(mtmv, ivmInfo);
+            LOG.info("IVM baseline published after full refresh for mv={}, signature={}, canonicalLayout={}",
+                    mtmv.getName(), ivmInfo.getPlanSignature(),
+                    planSignature == null ? "unchanged" : planSignature.getCanonicalString());
+        } finally {
+            mtmv.writeMvUnlock();
         }
-        return result;
     }
 
-    private static Set<BaseTableInfo> getBaseTablesForIvmState(MTMV mtmv) {
-        MTMVRelation relation = mtmv.getRelation();
-        return relation == null ? null : relation.getBaseTablesOneLevel();
+    /** Marks the stream baseline unusable before a full-image refresh starts writing. */
+    public static long markIvmBaselineBroken(MTMV mtmv) {
+        mtmv.writeMvLock();
+        try {
+            IvmInfo ivmInfo = new IvmInfo(mtmv.getIvmInfo());
+            if (!ivmInfo.isBinlogBroken()) {
+                ivmInfo.setBinlogBroken(true);
+                persistIvmInfo(mtmv, ivmInfo);
+                LOG.info("Marked IVM stream baseline broken before full-image refresh for mv={}", mtmv.getName());
+            }
+            return mtmv.getIvmBinlogBrokenGeneration();
+        } finally {
+            mtmv.writeMvUnlock();
+        }
+    }
+
+    private static void persistIvmInfo(MTMV mtmv, IvmInfo ivmInfo) {
+        TableNameInfo tableName = new TableNameInfo(mtmv.getQualifiedDbName(), mtmv.getName());
+        Env.getCurrentEnv().alterMTMVIvmInfo(tableName, ivmInfo);
     }
 
 }

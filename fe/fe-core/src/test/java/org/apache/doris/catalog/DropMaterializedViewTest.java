@@ -190,7 +190,7 @@ public class DropMaterializedViewTest {
         Database database = Env.getCurrentInternalCatalog().getDbOrDdlException(db);
         MTMV mtmv = (MTMV) database.getTableOrDdlException(mvName);
         Assertions.assertTrue(mtmv.isIvm());
-        String streamName = IvmUtil.streamName(mtmv.getId(), baseTable);
+        String streamName = IvmUtil.streamName(mtmv, database.getTableOrDdlException(baseTable));
         Assertions.assertNotNull(database.getTableNullable(streamName),
                 "Stream should be created for IVM MTMV");
 
@@ -198,5 +198,38 @@ public class DropMaterializedViewTest {
         dropMvByNereids(String.format("DROP MATERIALIZED VIEW %s.%s", db, mvName));
         Assertions.assertNull(database.getTableNullable(streamName),
                 "Stream should be removed after MTMV drop");
+    }
+
+    @Test
+    public void testDropIvmMtmvPreservesSameNamedOrdinaryTable() throws Exception {
+        Config.enable_table_stream = true;
+        String db = UnitTestUtil.DB_NAME;
+        String baseTableName = "ivm_drop_collision_base";
+        String mvName = "ivm_drop_collision_mv";
+        createTable(String.format("CREATE TABLE %s.%s (k1 int) "
+                + "UNIQUE KEY(k1) DISTRIBUTED BY HASH(k1) BUCKETS 1 "
+                + "PROPERTIES ('replication_num' = '1', 'enable_unique_key_merge_on_write' = 'true', "
+                + "'binlog.enable' = 'true', 'binlog.format' = 'ROW', "
+                + "'binlog.need_historical_value' = 'true');", db, baseTableName));
+        createMvByNereids(String.format("CREATE MATERIALIZED VIEW %s.%s "
+                + "BUILD DEFERRED REFRESH INCREMENTAL ON MANUAL "
+                + "DISTRIBUTED BY RANDOM BUCKETS 1 PROPERTIES ('replication_num' = '1') "
+                + "AS SELECT k1 FROM %s.%s;", db, mvName, db, baseTableName));
+
+        Database database = Env.getCurrentInternalCatalog().getDbOrDdlException(db);
+        MTMV mtmv = (MTMV) database.getTableOrDdlException(mvName);
+        String streamName = IvmUtil.streamName(mtmv, database.getTableOrDdlException(baseTableName));
+        TableIf stream = database.getTableOrDdlException(streamName);
+        Env.getCurrentEnv().getTableStreamManager().removeTableStream(
+                (org.apache.doris.catalog.stream.BaseTableStream) stream);
+        database.unregisterTable(stream.getId());
+        createTable(String.format("CREATE TABLE %s.`%s` (k1 int) "
+                + "DUPLICATE KEY(k1) DISTRIBUTED BY HASH(k1) BUCKETS 1 "
+                + "PROPERTIES ('replication_num' = '1');", db, streamName));
+        TableIf ordinaryTable = database.getTableOrDdlException(streamName);
+
+        dropMvByNereids(String.format("DROP MATERIALIZED VIEW %s.%s", db, mvName));
+
+        Assertions.assertSame(ordinaryTable, database.getTableNullable(streamName));
     }
 }

@@ -27,30 +27,27 @@ import org.apache.doris.common.MetaNotFoundException;
 import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.mtmv.MTMVRefreshEnum.RefreshMethod;
 import org.apache.doris.mtmv.MTMVRefreshInfo;
-import org.apache.doris.mtmv.ivm.IvmRefreshExplainResult;
 import org.apache.doris.mtmv.ivm.IvmRefreshManager;
 import org.apache.doris.mysql.privilege.AccessControllerManager;
+import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.glue.LogicalPlanAdapter;
 import org.apache.doris.nereids.parser.NereidsParser;
-import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.commands.ExplainCommand.ExplainLevel;
 import org.apache.doris.nereids.trees.plans.commands.info.RefreshMTMVInfo;
 import org.apache.doris.nereids.trees.plans.commands.info.RefreshMTMVInfo.RefreshMode;
+import org.apache.doris.nereids.trees.plans.commands.insert.InsertIntoTableCommand;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.qe.ConnectContext;
-import org.apache.doris.qe.ResultSet;
 import org.apache.doris.qe.StmtExecutor;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
 import java.util.Collections;
-import java.util.List;
 
-public class ExplainRefreshIvmCommandTest {
+public class ExplainRefreshMTMVCommandTest {
     private final NereidsParser parser = new NereidsParser();
 
     // ---------- parse tests ----------
@@ -59,8 +56,8 @@ public class ExplainRefreshIvmCommandTest {
     public void testParseExplainRefreshIncrementalOverview() {
         LogicalPlan plan = extractLogicalPlan("EXPLAIN REFRESH MATERIALIZED VIEW db1.mv1 INCREMENTAL");
 
-        Assertions.assertInstanceOf(ExplainRefreshIvmCommand.class, plan);
-        ExplainRefreshIvmCommand explain = (ExplainRefreshIvmCommand) plan;
+        Assertions.assertInstanceOf(ExplainRefreshMTMVCommand.class, plan);
+        ExplainRefreshMTMVCommand explain = (ExplainRefreshMTMVCommand) plan;
         Assertions.assertEquals(ExplainLevel.NORMAL, explain.getLevel());
     }
 
@@ -69,8 +66,8 @@ public class ExplainRefreshIvmCommandTest {
         LogicalPlan plan = extractLogicalPlan(
                 "EXPLAIN LOGICAL PLAN REFRESH MATERIALIZED VIEW db1.mv1 INCREMENTAL");
 
-        Assertions.assertInstanceOf(ExplainRefreshIvmCommand.class, plan);
-        ExplainRefreshIvmCommand explain = (ExplainRefreshIvmCommand) plan;
+        Assertions.assertInstanceOf(ExplainRefreshMTMVCommand.class, plan);
+        ExplainRefreshMTMVCommand explain = (ExplainRefreshMTMVCommand) plan;
         Assertions.assertEquals(ExplainLevel.REWRITTEN_PLAN, explain.getLevel());
     }
 
@@ -79,8 +76,8 @@ public class ExplainRefreshIvmCommandTest {
         LogicalPlan plan = extractLogicalPlan(
                 "EXPLAIN PHYSICAL PLAN REFRESH MATERIALIZED VIEW db1.mv1 INCREMENTAL");
 
-        Assertions.assertInstanceOf(ExplainRefreshIvmCommand.class, plan);
-        ExplainRefreshIvmCommand explain = (ExplainRefreshIvmCommand) plan;
+        Assertions.assertInstanceOf(ExplainRefreshMTMVCommand.class, plan);
+        ExplainRefreshMTMVCommand explain = (ExplainRefreshMTMVCommand) plan;
         Assertions.assertEquals(ExplainLevel.OPTIMIZED_PLAN, explain.getLevel());
     }
 
@@ -89,8 +86,8 @@ public class ExplainRefreshIvmCommandTest {
         LogicalPlan plan = extractLogicalPlan(
                 "EXPLAIN LOGICAL PLAN PROCESS REFRESH MATERIALIZED VIEW db1.mv1 INCREMENTAL");
 
-        Assertions.assertInstanceOf(ExplainRefreshIvmCommand.class, plan);
-        ExplainRefreshIvmCommand explain = (ExplainRefreshIvmCommand) plan;
+        Assertions.assertInstanceOf(ExplainRefreshMTMVCommand.class, plan);
+        ExplainRefreshMTMVCommand explain = (ExplainRefreshMTMVCommand) plan;
         Assertions.assertEquals(ExplainLevel.REWRITTEN_PLAN, explain.getLevel());
         Assertions.assertTrue(explain.showPlanProcess());
     }
@@ -100,8 +97,8 @@ public class ExplainRefreshIvmCommandTest {
         LogicalPlan plan = extractLogicalPlan(
                 "EXPLAIN ALL PLAN REFRESH MATERIALIZED VIEW db1.mv1 INCREMENTAL");
 
-        Assertions.assertInstanceOf(ExplainRefreshIvmCommand.class, plan);
-        ExplainRefreshIvmCommand explain = (ExplainRefreshIvmCommand) plan;
+        Assertions.assertInstanceOf(ExplainRefreshMTMVCommand.class, plan);
+        ExplainRefreshMTMVCommand explain = (ExplainRefreshMTMVCommand) plan;
         Assertions.assertEquals(ExplainLevel.ALL_PLAN, explain.getLevel());
     }
 
@@ -110,8 +107,8 @@ public class ExplainRefreshIvmCommandTest {
         LogicalPlan plan = extractLogicalPlan(
                 "EXPLAIN DISTRIBUTED PLAN REFRESH MATERIALIZED VIEW db1.mv1 INCREMENTAL");
 
-        Assertions.assertInstanceOf(ExplainRefreshIvmCommand.class, plan);
-        ExplainRefreshIvmCommand explain = (ExplainRefreshIvmCommand) plan;
+        Assertions.assertInstanceOf(ExplainRefreshMTMVCommand.class, plan);
+        ExplainRefreshMTMVCommand explain = (ExplainRefreshMTMVCommand) plan;
         Assertions.assertEquals(ExplainLevel.DISTRIBUTED_PLAN, explain.getLevel());
     }
 
@@ -120,14 +117,19 @@ public class ExplainRefreshIvmCommandTest {
         LogicalPlan plan = extractLogicalPlan(
                 "EXPLAIN REFRESH MATERIALIZED VIEW db1.mv1 INCREMENTAL");
 
-        Assertions.assertInstanceOf(ExplainRefreshIvmCommand.class, plan);
-        ExplainRefreshIvmCommand explain = (ExplainRefreshIvmCommand) plan;
+        Assertions.assertInstanceOf(ExplainRefreshMTMVCommand.class, plan);
+        ExplainRefreshMTMVCommand explain = (ExplainRefreshMTMVCommand) plan;
         Assertions.assertEquals(ExplainLevel.NORMAL, explain.getLevel());
     }
 
     @Test
-    public void testParseExplainRefreshCompleteFails() {
-        assertParseFails("EXPLAIN REFRESH MATERIALIZED VIEW db1.mv1 COMPLETE");
+    public void testParseExplainRefreshComplete() {
+        LogicalPlan plan = extractLogicalPlan(
+                "EXPLAIN REFRESH MATERIALIZED VIEW db1.mv1 COMPLETE");
+
+        Assertions.assertInstanceOf(ExplainRefreshMTMVCommand.class, plan);
+        ExplainRefreshMTMVCommand explain = (ExplainRefreshMTMVCommand) plan;
+        Assertions.assertEquals(ExplainLevel.NORMAL, explain.getLevel());
     }
 
     @Test
@@ -145,23 +147,18 @@ public class ExplainRefreshIvmCommandTest {
         Mockito.when(refreshInfo.getRefreshMethod()).thenReturn(RefreshMethod.INCREMENTAL);
         Mockito.when(mtmv.getRefreshInfo()).thenReturn(refreshInfo);
         IvmRefreshManager manager = Mockito.mock(IvmRefreshManager.class);
-        IvmRefreshExplainResult result = mockExplainResultWithMergedDelta();
-        Mockito.when(manager.explainRefresh(mtmv)).thenReturn(result);
+        InsertIntoTableCommand insertCommand = Mockito.mock(InsertIntoTableCommand.class);
+        Mockito.when(manager.buildInsertCommand(mtmv)).thenReturn(insertCommand);
         StmtExecutor executor = Mockito.mock(StmtExecutor.class);
+        RecordingExplainCommand explainCommand = newExplainCommand(RefreshMode.INCREMENTAL, ExplainLevel.NORMAL, manager);
 
         try (MockedStatic<Env> mockedEnv = mockEnvWithMtmv(mtmv)) {
-            newExplainCommand(RefreshMode.INCREMENTAL, ExplainLevel.NORMAL, manager)
-                    .run(new ConnectContext(), executor);
+            explainCommand.run(new ConnectContext(), executor);
         }
 
-        Mockito.verify(manager).explainRefresh(mtmv);
-        ResultSet resultSet = captureResultSet(executor);
-        List<List<String>> rows = resultSet.getResultRows();
-        Assertions.assertEquals(2, rows.size());
-        Assertions.assertEquals("IVM_NORMALIZED_PLAN", rows.get(0).get(0));
-        Assertions.assertEquals("normalized plan", rows.get(0).get(2));
-        Assertions.assertEquals("IVM_DELTA_PLAN", rows.get(1).get(0));
-        Assertions.assertEquals("merged delta plan", rows.get(1).get(2));
+        Mockito.verify(manager).buildInsertCommand(mtmv);
+        Assertions.assertSame(insertCommand, explainCommand.explainedCommand);
+        Assertions.assertNotNull(explainCommand.explainConnectContext);
     }
 
     @Test
@@ -172,21 +169,18 @@ public class ExplainRefreshIvmCommandTest {
         Mockito.when(refreshInfo.getRefreshMethod()).thenReturn(RefreshMethod.INCREMENTAL);
         Mockito.when(mtmv.getRefreshInfo()).thenReturn(refreshInfo);
         IvmRefreshManager manager = Mockito.mock(IvmRefreshManager.class);
-        IvmRefreshExplainResult result = mockExplainResultWithMergedDelta();
-        Mockito.when(manager.explainRefresh(mtmv)).thenReturn(result);
+        InsertIntoTableCommand insertCommand = Mockito.mock(InsertIntoTableCommand.class);
+        Mockito.when(manager.buildInsertCommand(mtmv)).thenReturn(insertCommand);
         StmtExecutor executor = Mockito.mock(StmtExecutor.class);
+        RecordingExplainCommand explainCommand = newExplainCommand(
+                RefreshMode.INCREMENTAL, ExplainLevel.ANALYZED_PLAN, manager);
 
         try (MockedStatic<Env> mockedEnv = mockEnvWithMtmv(mtmv)) {
-            newExplainCommand(RefreshMode.INCREMENTAL, ExplainLevel.ANALYZED_PLAN, manager)
-                    .run(new ConnectContext(), executor);
+            explainCommand.run(new ConnectContext(), executor);
         }
 
-        Mockito.verify(manager).explainRefresh(mtmv);
-        ResultSet resultSet = captureResultSet(executor);
-        List<List<String>> rows = resultSet.getResultRows();
-        Assertions.assertEquals(1, rows.size());
-        Assertions.assertEquals(1, rows.get(0).size());
-        Assertions.assertEquals("merged delta plan", rows.get(0).get(0));
+        Mockito.verify(manager).buildInsertCommand(mtmv);
+        Assertions.assertSame(insertCommand, explainCommand.explainedCommand);
     }
 
     @Test
@@ -200,8 +194,7 @@ public class ExplainRefreshIvmCommandTest {
                             .run(new ConnectContext(), executor));
         }
 
-        Mockito.verify(manager, Mockito.never()).explainRefresh(Mockito.any());
-        Mockito.verify(executor, Mockito.never()).sendResultSet(Mockito.any(ResultSet.class));
+        Mockito.verify(manager, Mockito.never()).buildInsertCommand(Mockito.any());
     }
 
     @Test
@@ -217,8 +210,7 @@ public class ExplainRefreshIvmCommandTest {
                             .run(new ConnectContext(), executor));
         }
 
-        Mockito.verify(manager, Mockito.never()).explainRefresh(Mockito.any());
-        Mockito.verify(executor, Mockito.never()).sendResultSet(Mockito.any(ResultSet.class));
+        Mockito.verify(manager, Mockito.never()).buildInsertCommand(Mockito.any());
     }
 
     @Test
@@ -229,32 +221,52 @@ public class ExplainRefreshIvmCommandTest {
         Mockito.when(refreshInfo.getRefreshMethod()).thenReturn(RefreshMethod.INCREMENTAL);
         Mockito.when(mtmv.getRefreshInfo()).thenReturn(refreshInfo);
         IvmRefreshManager manager = Mockito.mock(IvmRefreshManager.class);
-        IvmRefreshExplainResult result = mockExplainResultWithMergedDelta();
-        Mockito.when(manager.explainRefresh(mtmv)).thenReturn(result);
+        InsertIntoTableCommand insertCommand = Mockito.mock(InsertIntoTableCommand.class);
+        Mockito.when(manager.buildInsertCommand(mtmv)).thenReturn(insertCommand);
         StmtExecutor executor = Mockito.mock(StmtExecutor.class);
+        RecordingExplainCommand explainCommand = newExplainCommand(
+                RefreshMode.INCREMENTAL, ExplainLevel.ANALYZED_PLAN, manager);
 
         try (MockedStatic<Env> mockedEnv = mockEnvWithMtmv(mtmv)) {
-            // REWRITTEN_PLAN without deltaId no longer throws — command succeeds
-            newExplainCommand(RefreshMode.INCREMENTAL, ExplainLevel.ANALYZED_PLAN, manager)
-                    .run(new ConnectContext(), executor);
+            explainCommand.run(new ConnectContext(), executor);
         }
 
-        Mockito.verify(manager).explainRefresh(mtmv);
-        ResultSet resultSet = captureResultSet(executor);
-        Assertions.assertEquals(1, resultSet.getResultRows().size());
+        Mockito.verify(manager).buildInsertCommand(mtmv);
+        Assertions.assertSame(insertCommand, explainCommand.explainedCommand);
     }
 
     @Test
-    public void testRunExplainRefreshCompleteModeFailsBeforeMetadataAccess() throws Exception {
+    public void testRunExplainRefreshCompleteSuccess() throws Exception {
+        MTMV mtmv = Mockito.mock(MTMV.class);
+        MTMVRefreshInfo refreshInfo = Mockito.mock(MTMVRefreshInfo.class);
+        Mockito.when(refreshInfo.getRefreshMethod()).thenReturn(RefreshMethod.COMPLETE);
+        Mockito.when(mtmv.getRefreshInfo()).thenReturn(refreshInfo);
         IvmRefreshManager manager = Mockito.mock(IvmRefreshManager.class);
         StmtExecutor executor = Mockito.mock(StmtExecutor.class);
+        RecordingExplainCommand explainCommand = newExplainCommand(RefreshMode.COMPLETE, ExplainLevel.NORMAL, manager);
 
-        Assertions.assertThrows(org.apache.doris.nereids.exceptions.AnalysisException.class,
-                () -> newExplainCommand(RefreshMode.COMPLETE, ExplainLevel.NORMAL, manager)
-                        .run(new ConnectContext(), executor));
+        try (MockedStatic<Env> mockedEnv = mockEnvWithMtmv(mtmv)) {
+            explainCommand.run(new ConnectContext(), executor);
+        }
 
-        Mockito.verify(manager, Mockito.never()).explainRefresh(Mockito.any());
-        Mockito.verify(executor, Mockito.never()).sendResultSet(Mockito.any(ResultSet.class));
+        Assertions.assertNotNull(explainCommand.explainedCommand);
+    }
+
+    @Test
+    public void testRunExplainRefreshPartitionsFails() throws Exception {
+        MTMV mtmv = Mockito.mock(MTMV.class);
+        MTMVRefreshInfo refreshInfo = Mockito.mock(MTMVRefreshInfo.class);
+        Mockito.when(refreshInfo.getRefreshMethod()).thenReturn(RefreshMethod.PARTITIONS);
+        Mockito.when(mtmv.getRefreshInfo()).thenReturn(refreshInfo);
+        StmtExecutor executor = Mockito.mock(StmtExecutor.class);
+
+        try (MockedStatic<Env> mockedEnv = mockEnvWithMtmv(mtmv)) {
+            Assertions.assertThrows(org.apache.doris.nereids.exceptions.AnalysisException.class,
+                    () -> new ExplainRefreshMTMVCommand(
+                            new RefreshMTMVInfo(new TableNameInfo("internal", "db1", "mv1"),
+                                    Collections.emptyList(), RefreshMode.PARTITIONS),
+                            ExplainLevel.NORMAL, false).run(new ConnectContext(), executor));
+        }
     }
 
     // ---------- helpers ----------
@@ -275,30 +287,47 @@ public class ExplainRefreshIvmCommandTest {
         }
     }
 
-    private ExplainRefreshIvmCommand newExplainCommand(RefreshMode refreshMode, ExplainLevel level,
+    private RecordingExplainCommand newExplainCommand(RefreshMode refreshMode, ExplainLevel level,
             IvmRefreshManager manager) {
         RefreshMTMVInfo info = new RefreshMTMVInfo(
                 new TableNameInfo("internal", "db1", "mv1"), Collections.emptyList(), refreshMode);
-        return new ExplainRefreshIvmCommand(info, level, false) {
-            @Override
-            IvmRefreshManager createIvmRefreshManager() {
-                return manager;
+        return new RecordingExplainCommand(info, level, manager);
+    }
+
+    private static class RecordingExplainCommand extends ExplainRefreshMTMVCommand {
+        private final IvmRefreshManager manager;
+        private LogicalPlan explainedCommand;
+        private ConnectContext explainConnectContext;
+
+        private RecordingExplainCommand(RefreshMTMVInfo info, ExplainLevel level, IvmRefreshManager manager) {
+            super(info, level, false);
+            this.manager = manager;
+        }
+
+        @Override
+        IvmRefreshManager createIvmRefreshManager() {
+            return manager;
+        }
+
+        @Override
+        protected ConnectContext createExplainConnectContext(MTMV mtmv) {
+            return new ConnectContext();
+        }
+
+        @Override
+        protected LogicalPlan createRefreshCommand(MTMV mtmv, StatementContext statementContext) {
+            if (getRefreshMTMVInfo().getRefreshMode() == RefreshMode.INCREMENTAL) {
+                return manager.buildInsertCommand(mtmv);
             }
-        };
-    }
+            return Mockito.mock(UpdateMvByPartitionCommand.class);
+        }
 
-    private ResultSet captureResultSet(StmtExecutor executor) throws Exception {
-        ArgumentCaptor<ResultSet> resultSetCaptor = ArgumentCaptor.forClass(ResultSet.class);
-        Mockito.verify(executor).sendResultSet(resultSetCaptor.capture());
-        return resultSetCaptor.getValue();
-    }
-
-    private IvmRefreshExplainResult mockExplainResultWithMergedDelta() {
-        Plan normalizedPlan = Mockito.mock(Plan.class);
-        Mockito.when(normalizedPlan.treeString()).thenReturn("normalized plan");
-        LogicalPlan mergedDeltaPlan = Mockito.mock(LogicalPlan.class);
-        Mockito.when(mergedDeltaPlan.treeString()).thenReturn("merged delta plan");
-        return new IvmRefreshExplainResult(normalizedPlan, mergedDeltaPlan);
+        @Override
+        protected void runExplainCommand(ConnectContext planCtx, StmtExecutor executor,
+                LogicalPlan command) {
+            this.explainConnectContext = planCtx;
+            this.explainedCommand = command;
+        }
     }
 
     private MockedStatic<Env> mockEnvWithMtmv(MTMV mtmv) throws Exception {

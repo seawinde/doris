@@ -18,6 +18,15 @@
 package org.apache.doris.mtmv.ivm;
 
 import org.apache.doris.catalog.Column;
+import org.apache.doris.catalog.Database;
+import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.MTMV;
+import org.apache.doris.catalog.OlapTable;
+import org.apache.doris.catalog.TableIf;
+import org.apache.doris.catalog.info.TableNameInfo;
+import org.apache.doris.catalog.stream.OlapTableStream;
+import org.apache.doris.common.Config;
+import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.trees.expressions.Expression;
@@ -36,6 +45,7 @@ import com.google.common.collect.ImmutableList;
 
 import java.math.BigInteger;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -61,7 +71,7 @@ public class IvmUtil {
      * NULL propagation in the hash function, and {@code cast(isnull(key) AS VARCHAR)} to distinguish
      * groups that differ only in which positions are NULL (e.g. (NULL,'x') vs ('x',NULL)).
      *
-     * <p>Used by both normalize (IvmNormalizeMtmv) and delta rewrite (IvmAggDeltaHandler)
+     * <p>Used by both normalize (IvmNormalizeMTMV) and delta rewrite (IvmAggDeltaHandler)
      * to ensure row-id derivation is identical.
      */
     public static Expression buildRowIdHash(List<? extends Expression> keyExprs) {
@@ -136,13 +146,111 @@ public class IvmUtil {
 
     /** IVM stream name prefix for auto-created streams. */
     public static final String IVM_STREAM_PREFIX = "__doris_ivm_stream_";
+    private static final int IVM_STREAM_ID_RADIX = Character.MAX_RADIX;
 
     /**
      * Computes the deterministic stream name for a base table backing an IVM-enabled MTMV.
-     * Format: __doris_ivm_stream_{mvId}_{baseTableName}
+     * The MV name is only the readable part. The base-36 IDs keep the internal identity
+     * stable across table renames without consuming most of the table-name length budget.
      */
-    public static String streamName(long mvId, String baseTableName) {
-        return IVM_STREAM_PREFIX + mvId + "_" + baseTableName;
+    public static String streamName(MTMV mtmv, TableIf baseTable) {
+        Objects.requireNonNull(mtmv, "mtmv can not be null");
+        Objects.requireNonNull(baseTable, "baseTable can not be null");
+        String identitySuffix = streamIdentitySuffix(mtmv, baseTable);
+        int mvNameLength = Config.table_name_length_limit - IVM_STREAM_PREFIX.length() - identitySuffix.length();
+        if (mvNameLength <= 0) {
+            throw new AnalysisException("table_name_length_limit is too small for an internal IVM stream name: "
+                    + Config.table_name_length_limit);
+        }
+        String readableMvName = truncateWithoutSplittingSurrogate(mtmv.getName(), mvNameLength);
+        if (readableMvName.isEmpty()) {
+            throw new AnalysisException("table_name_length_limit can not preserve the MV name in an internal stream");
+        }
+        return IVM_STREAM_PREFIX + readableMvName + identitySuffix;
+    }
+
+    /** Returns the fully qualified internal stream location for one IVM base table. */
+    public static TableNameInfo streamTableName(MTMV mtmv, TableIf baseTable) {
+        Objects.requireNonNull(mtmv, "mtmv can not be null");
+        return new TableNameInfo(InternalCatalog.INTERNAL_CATALOG_NAME, mtmv.getQualifiedDbName(),
+                streamName(mtmv, baseTable));
+    }
+
+    /** Resolves and validates the internal stream used by an IVM base table. */
+    public static OlapTableStream getIvmStream(MTMV mtmv, OlapTable expectedBaseTable) {
+        Objects.requireNonNull(mtmv, "mtmv can not be null");
+        Objects.requireNonNull(expectedBaseTable, "expectedBaseTable can not be null");
+        TableNameInfo expectedStreamName = streamTableName(mtmv, expectedBaseTable);
+        try {
+            Database db = Env.getCurrentInternalCatalog().getDbOrAnalysisException(expectedStreamName.getDb());
+            TableIf exactMatch = db.getTableNullable(expectedStreamName.getTbl());
+            if (exactMatch != null) {
+                return validateIvmStream(exactMatch, expectedBaseTable, expectedStreamName.toString());
+            }
+
+            // The readable MV-name prefix may be stale after RENAME. The stable ID suffix still identifies it.
+            String identitySuffix = streamIdentitySuffix(mtmv, expectedBaseTable);
+            OlapTableStream resolved = null;
+            for (Long streamId : Env.getCurrentEnv().getTableStreamManager().getTableStreamIds(db)) {
+                TableIf candidate = db.getTableNullable(streamId);
+                if (candidate == null || !candidate.getName().endsWith(identitySuffix)) {
+                    continue;
+                }
+                OlapTableStream stream = validateIvmStream(candidate, expectedBaseTable, candidate.getName());
+                if (resolved != null) {
+                    throw new IvmException(IvmFailureReason.STREAM_UNSUPPORTED,
+                            "Multiple IVM streams match MV " + mtmv.getName()
+                                    + " and base table " + expectedBaseTable.getName());
+                }
+                resolved = stream;
+            }
+            if (resolved == null) {
+                throw new IvmException(IvmFailureReason.STREAM_UNSUPPORTED,
+                        "IVM stream not found for base table " + expectedBaseTable.getName()
+                                + ", expected=" + expectedStreamName);
+            }
+            return resolved;
+        } catch (IvmException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IvmException(IvmFailureReason.STREAM_UNSUPPORTED,
+                    "IVM stream not found for base table " + expectedBaseTable.getName()
+                            + ", expected=" + expectedStreamName, e);
+        }
+    }
+
+    private static OlapTableStream validateIvmStream(TableIf table, OlapTable expectedBaseTable,
+            String streamName) {
+        if (!(table instanceof OlapTableStream)) {
+            throw new IvmException(IvmFailureReason.STREAM_UNSUPPORTED,
+                    "IVM stream is not an OLAP table stream: " + streamName);
+        }
+        OlapTableStream stream = (OlapTableStream) table;
+        TableIf actualBaseTable = stream.getBaseTableNullable();
+        if (stream.isDisabled() || stream.isStale()
+                || actualBaseTable == null
+                || actualBaseTable.getId() != expectedBaseTable.getId()
+                || actualBaseTable.getDatabase().getId() != expectedBaseTable.getDatabase().getId()) {
+            throw new IvmException(IvmFailureReason.STREAM_UNSUPPORTED,
+                    "IVM stream is unavailable or references a different base table: " + streamName);
+        }
+        return stream;
+    }
+
+    private static String streamIdentitySuffix(MTMV mtmv, TableIf baseTable) {
+        return "_" + Long.toString(mtmv.getId(), IVM_STREAM_ID_RADIX)
+                + "_" + Long.toString(baseTable.getId(), IVM_STREAM_ID_RADIX);
+    }
+
+    private static String truncateWithoutSplittingSurrogate(String name, int maxLength) {
+        if (name.length() <= maxLength) {
+            return name;
+        }
+        int end = maxLength;
+        if (Character.isHighSurrogate(name.charAt(end - 1))) {
+            end--;
+        }
+        return name.substring(0, end);
     }
 
     /**

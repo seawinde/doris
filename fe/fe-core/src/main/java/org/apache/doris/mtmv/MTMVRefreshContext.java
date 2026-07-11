@@ -65,4 +65,11 @@ public class MTMVRefreshContext {
         return context;
     }
 
+    public MTMVRefreshContext withBaseVersions(MTMVBaseVersions baseVersions) {
+        MTMVRefreshContext context = new MTMVRefreshContext(mtmv);
+        context.partitionMappings = partitionMappings;
+        context.baseVersions = baseVersions;
+        return context;
+    }
+
 }

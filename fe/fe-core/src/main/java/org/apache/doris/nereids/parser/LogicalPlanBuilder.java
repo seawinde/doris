@@ -219,7 +219,7 @@ import org.apache.doris.nereids.DorisParser.ExceptContext;
 import org.apache.doris.nereids.DorisParser.ExceptOrReplaceContext;
 import org.apache.doris.nereids.DorisParser.ExistContext;
 import org.apache.doris.nereids.DorisParser.ExplainContext;
-import org.apache.doris.nereids.DorisParser.ExplainRefreshIvmContext;
+import org.apache.doris.nereids.DorisParser.ExplainRefreshMtmvContext;
 import org.apache.doris.nereids.DorisParser.ExportContext;
 import org.apache.doris.nereids.DorisParser.ExpressionWithEofContext;
 import org.apache.doris.nereids.DorisParser.ExpressionWithOrderContext;
@@ -763,7 +763,7 @@ import org.apache.doris.nereids.trees.plans.commands.ExecuteActionCommand;
 import org.apache.doris.nereids.trees.plans.commands.ExplainCommand;
 import org.apache.doris.nereids.trees.plans.commands.ExplainCommand.ExplainLevel;
 import org.apache.doris.nereids.trees.plans.commands.ExplainDictionaryCommand;
-import org.apache.doris.nereids.trees.plans.commands.ExplainRefreshIvmCommand;
+import org.apache.doris.nereids.trees.plans.commands.ExplainRefreshMTMVCommand;
 import org.apache.doris.nereids.trees.plans.commands.ExportCommand;
 import org.apache.doris.nereids.trees.plans.commands.GrantResourcePrivilegeCommand;
 import org.apache.doris.nereids.trees.plans.commands.GrantRoleCommand;
@@ -1849,13 +1849,15 @@ public class LogicalPlanBuilder extends DorisParserBaseVisitor<Object> {
     }
 
     @Override
-    public LogicalPlan visitExplainRefreshIvm(ExplainRefreshIvmContext ctx) {
+    public LogicalPlan visitExplainRefreshMtmv(ExplainRefreshMtmvContext ctx) {
         List<String> nameParts = visitMultipartIdentifier(ctx.mvName);
-        RefreshMTMVInfo refreshMTMVInfo = new RefreshMTMVInfo(
-                new TableNameInfo(nameParts), ImmutableList.of(), RefreshMode.INCREMENTAL);
+        ParsedRefreshPolicy refreshPolicy = visitRefreshPolicy(ctx.refreshPolicy());
+        RefreshMTMVInfo refreshMTMVInfo = new RefreshMTMVInfo(new TableNameInfo(nameParts),
+                ImmutableList.of(), RefreshMode.valueOf(refreshPolicy.refreshMethod.name()),
+                refreshPolicy.allowFallback);
         return ParserUtils.withOrigin(ctx.explain(), () -> {
             Pair<ExplainLevel, Boolean> explainInfo = parseExplain(ctx.explain());
-            return new ExplainRefreshIvmCommand(
+            return new ExplainRefreshMTMVCommand(
                     refreshMTMVInfo, explainInfo.first, explainInfo.second);
         });
     }

@@ -19,10 +19,12 @@ package org.apache.doris.nereids.rules.rewrite;
 
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Partition;
+import org.apache.doris.catalog.stream.OlapTableStreamWrapper;
 import org.apache.doris.nereids.rules.Rule;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.trees.plans.logical.LogicalEmptyRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
+import org.apache.doris.nereids.trees.plans.logical.LogicalOlapTableStreamScan;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.transaction.TransactionEntry;
 
@@ -48,6 +50,11 @@ public class PruneEmptyPartition extends OneRewriteRuleFactory {
             }
             LogicalOlapScan scan = ctx.root;
             OlapTable table = scan.getTable();
+            if (scan instanceof LogicalOlapTableStreamScan
+                    && (((LogicalOlapTableStreamScan) scan).isReset()
+                            || ((LogicalOlapTableStreamScan) scan).isSnapshot())) {
+                table = ((OlapTableStreamWrapper) table).getBaseTable();
+            }
             List<Long> partitionIdsToPrune = scan.getSelectedPartitionIds();
             List<Long> ids = table.selectNonEmptyPartitionIds(partitionIdsToPrune);
             if (ctx.connectContext != null && ctx.connectContext.isTxnModel()) {

@@ -52,7 +52,7 @@ public class StreamConsumptionInfoExtractor {
                     LogicalOlapTableStreamScan streamScan = (LogicalOlapTableStreamScan) scan;
                     if (!streamScan.isSnapshot()) {
                         OlapTableStreamWrapper wrapper = streamScan.getTable();
-                        OlapTableStreamUpdate update = toOlapTableStreamUpdate(wrapper);
+                        OlapTableStreamUpdate update = wrapper.getOutputUpdate();
                         if (!update.getNext().isEmpty()) {
                             // key -> (dbId, streamId)
                             Pair<Long, Long> key = Pair.of(wrapper.getStreamDbId(), wrapper.getStreamId());
@@ -69,25 +69,4 @@ public class StreamConsumptionInfoExtractor {
         return infos;
     }
 
-    private static OlapTableStreamUpdate toOlapTableStreamUpdate(OlapTableStreamWrapper wrapper) {
-        Map<Long, Long> prev = Maps.newHashMapWithExpectedSize(wrapper.getOutputUpdateMap().size());
-        Map<Long, Long> next = Maps.newHashMapWithExpectedSize(wrapper.getOutputUpdateMap().size());
-        for (Map.Entry<Long, Pair<Long, Long>> entry : wrapper.getOutputUpdateMap().entrySet()) {
-            Pair<Long, Long> update = entry.getValue();
-            if (update.first != null) {
-                if (wrapper.isHistoryPartition(entry.getKey())) {
-                    // use negative value to mark history offset
-                    prev.put(entry.getKey(), -update.first);
-                } else {
-                    prev.put(entry.getKey(), update.first);
-                }
-            }
-            if (update.second != null) {
-                next.put(entry.getKey(), update.second);
-            } else {
-                next.put(entry.getKey(), wrapper.getPartition(entry.getKey()).getTso());
-            }
-        }
-        return new OlapTableStreamUpdate(prev, next);
-    }
 }

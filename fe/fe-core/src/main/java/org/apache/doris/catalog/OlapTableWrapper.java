@@ -161,6 +161,16 @@ public class OlapTableWrapper extends OlapTable {
     }
 
     @Override
+    public boolean getEnableUniqueKeyMergeOnWrite() {
+        return originTable.getEnableUniqueKeyMergeOnWrite();
+    }
+
+    @Override
+    public BinlogConfig getBinlogConfig() {
+        return originTable.getBinlogConfig();
+    }
+
+    @Override
     public MaterializedIndexMeta getBaseIndexMeta() {
         return originTable.getBaseIndexMeta();
     }

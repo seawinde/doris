@@ -17,8 +17,6 @@
 
 package org.apache.doris.nereids.trees.plans;
 
-import org.apache.doris.analysis.CaseExpr;
-import org.apache.doris.analysis.Expr;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
@@ -33,6 +31,7 @@ import org.apache.doris.catalog.Tablet;
 import org.apache.doris.catalog.stream.BaseTableStream;
 import org.apache.doris.catalog.stream.OlapTableStream;
 import org.apache.doris.catalog.stream.OlapTableStreamUpdate;
+import org.apache.doris.catalog.stream.OlapTableStreamWrapper;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.Pair;
@@ -42,12 +41,17 @@ import org.apache.doris.nereids.glue.translator.PhysicalPlanTranslator;
 import org.apache.doris.nereids.glue.translator.PlanTranslatorContext;
 import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.properties.PhysicalProperties;
+import org.apache.doris.nereids.rules.rewrite.NormalizeOlapTableStreamScan;
 import org.apache.doris.nereids.trees.expressions.Alias;
+import org.apache.doris.nereids.trees.expressions.CaseWhen;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
+import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.StatementScopeIdGenerator;
 import org.apache.doris.nereids.trees.expressions.literal.VarcharLiteral;
 import org.apache.doris.nereids.trees.plans.commands.ExplainCommand;
+import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
+import org.apache.doris.nereids.trees.plans.logical.LogicalOlapTableStreamScan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalPlan;
@@ -68,6 +72,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * UTs for table stream query plan, including
@@ -171,19 +176,17 @@ public class ExplainTableStreamPlanTest extends TestWithFeService {
                 .getCascadesContext()
                 .getRewritePlan();
 
-        LogicalProject<?> project = findFirstLogicalProject(rewritePlan);
+        LogicalProject<?> project = findStreamVirtualColumnProject(rewritePlan);
         Assertions.assertNotNull(project);
-        List<NamedExpression> projects = project.getProjects();
-        Assertions.assertEquals(2, projects.size());
 
-        Alias seqAlias = (Alias) projects.get(0);
-        Assertions.assertEquals(Column.STREAM_SEQ_COL, seqAlias.getName());
+        Alias seqAlias = findAlias(project, Column.STREAM_SEQ_COL);
+        Assertions.assertNotNull(seqAlias);
         // history partition now projects STREAM_SEQ_COL from the base table commit-tso column
         Assertions.assertTrue(seqAlias.child() instanceof SlotReference);
         Assertions.assertEquals(Column.COMMIT_TSO_COL, ((SlotReference) seqAlias.child()).getName());
 
-        Alias changeTypeAlias = (Alias) projects.get(1);
-        Assertions.assertEquals(Column.STREAM_CHANGE_TYPE_COL, changeTypeAlias.getName());
+        Alias changeTypeAlias = findAlias(project, Column.STREAM_CHANGE_TYPE_COL);
+        Assertions.assertNotNull(changeTypeAlias);
         Assertions.assertTrue(changeTypeAlias.child() instanceof VarcharLiteral);
         Assertions.assertEquals("APPEND", ((VarcharLiteral) changeTypeAlias.child()).getValue());
     }
@@ -201,21 +204,21 @@ public class ExplainTableStreamPlanTest extends TestWithFeService {
                 .getCascadesContext()
                 .getRewritePlan();
 
-        LogicalProject<?> project = findFirstLogicalProject(rewritePlan);
+        LogicalProject<?> project = findStreamVirtualColumnProject(rewritePlan);
         Assertions.assertNotNull(project);
         List<NamedExpression> projects = project.getProjects();
         Assertions.assertEquals(4, projects.size());
 
         Assertions.assertEquals("k1", projects.get(0).getName());
         Assertions.assertEquals("k2", projects.get(1).getName());
-        Alias seqAlias = (Alias) projects.get(2);
-        Assertions.assertEquals(Column.STREAM_SEQ_COL, seqAlias.getName());
+        Alias seqAlias = findAlias(project, Column.STREAM_SEQ_COL);
+        Assertions.assertNotNull(seqAlias);
         // history partition now projects STREAM_SEQ_COL from the base table commit-tso column
         Assertions.assertTrue(seqAlias.child() instanceof SlotReference);
         Assertions.assertEquals(Column.COMMIT_TSO_COL, ((SlotReference) seqAlias.child()).getName());
 
-        Alias changeTypeAlias = (Alias) projects.get(3);
-        Assertions.assertEquals(Column.STREAM_CHANGE_TYPE_COL, changeTypeAlias.getName());
+        Alias changeTypeAlias = findAlias(project, Column.STREAM_CHANGE_TYPE_COL);
+        Assertions.assertNotNull(changeTypeAlias);
         Assertions.assertTrue(changeTypeAlias.child() instanceof VarcharLiteral);
         Assertions.assertEquals("APPEND", ((VarcharLiteral) changeTypeAlias.child()).getValue());
     }
@@ -239,6 +242,70 @@ public class ExplainTableStreamPlanTest extends TestWithFeService {
         PlanChecker.from(connectContext)
                 .checkPlannerResult("select  __DORIS_STREAM_CHANGE_TYPE_COL__, count(*) from test_stream.s1 "
                         + "group by __DORIS_STREAM_CHANGE_TYPE_COL__");
+    }
+
+    @Test
+    public void testVirtualColumnAliasInjectionByReservedName() throws Exception {
+        Database db = (Database) Env.getCurrentInternalCatalog().getDbOrMetaException("test_stream");
+        OlapTable baseTable = (OlapTable) db.getTableOrMetaException("tbl_stream_base");
+        OlapTableStream stream = (OlapTableStream) db.getTableOrMetaException("s2");
+        List<Long> selectedPartitionIds = baseTable.getPartitionIds();
+        OlapTableStreamWrapper wrapper = new OlapTableStreamWrapper(stream, baseTable, selectedPartitionIds);
+        LogicalOlapTableStreamScan scan = new LogicalOlapTableStreamScan(
+                StatementScopeIdGenerator.newRelationId(),
+                wrapper,
+                List.of("test_stream"),
+                selectedPartitionIds,
+                List.of(),
+                List.of(),
+                Optional.empty(),
+                List.of());
+        List<Slot> cachedOutput = new ArrayList<>();
+        for (Slot slot : scan.getOutput()) {
+            if (Column.STREAM_SEQ_COL.equals(slot.getName())
+                    || Column.STREAM_CHANGE_TYPE_COL.equals(slot.getName())) {
+                cachedOutput.add(new SlotReference(slot.getExprId(), slot.getName(), slot.getDataType(),
+                        slot.nullable(), slot.getQualifier()));
+            } else {
+                cachedOutput.add(slot);
+            }
+        }
+
+        Plan plan = PlanChecker.from(connectContext, scan.withCachedOutput(cachedOutput))
+                .applyTopDown(new NormalizeOlapTableStreamScan())
+                .getPlan();
+
+        Assertions.assertEquals(cachedOutput.size(), plan.getOutput().size());
+        for (int i = 0; i < cachedOutput.size(); i++) {
+            Slot expected = cachedOutput.get(i);
+            Slot actual = plan.getOutput().get(i);
+            Assertions.assertEquals(expected.getExprId(), actual.getExprId(), expected.getName());
+            Assertions.assertEquals(expected.getName(), actual.getName(), expected.getName());
+            Assertions.assertEquals(expected.getQualifier(), actual.getQualifier(), expected.getName());
+            Assertions.assertEquals(expected.nullable(), actual.nullable(), expected.getName());
+        }
+
+        boolean hasChangeTypeAlias = false;
+        boolean hasSequenceAlias = false;
+        for (Plan projectPlan : plan.<Plan>collectToList(node -> node instanceof LogicalProject)) {
+            for (NamedExpression expression : ((LogicalProject<?>) projectPlan).getProjects()) {
+                if (!(expression instanceof Alias)) {
+                    continue;
+                }
+                Alias alias = (Alias) expression;
+                if (Column.STREAM_CHANGE_TYPE_COL.equals(alias.getName())
+                        && alias.child() instanceof CaseWhen) {
+                    hasChangeTypeAlias = true;
+                }
+                if (Column.STREAM_SEQ_COL.equals(alias.getName())
+                        && alias.child() instanceof SlotReference
+                        && Column.BINLOG_TIMESTAMP_COL.equals(((SlotReference) alias.child()).getName())) {
+                    hasSequenceAlias = true;
+                }
+            }
+        }
+        Assertions.assertTrue(hasChangeTypeAlias);
+        Assertions.assertTrue(hasSequenceAlias);
     }
 
     @Test
@@ -303,28 +370,16 @@ public class ExplainTableStreamPlanTest extends TestWithFeService {
         ctx.setDatabase("test_stream");
         ctx.getSessionVariable().showHiddenColumns = true;
 
-        StatementScopeIdGenerator.clear();
-        PlanFragment fragment = getFragment(ctx, "explain select * from test_stream.s2");
-        PlanNode root = fragment.getPlanRoot();
-
-        List<OlapScanNode> scanNodes = new ArrayList<>();
-        collectOlapScanNodes(root, scanNodes);
-        Assertions.assertFalse(scanNodes.isEmpty());
-
-        boolean foundIncrementalCaseExpr = false;
-        for (OlapScanNode scanNode : scanNodes) {
-            List<Expr> projectList = scanNode.getProjectList();
-            if (projectList == null || projectList.size() < 4) {
-                continue;
-            }
-            Expr changeTypeExpr = projectList.get(3);
-            if (changeTypeExpr instanceof CaseExpr) {
-                foundIncrementalCaseExpr = true;
-                break;
-            }
-        }
-        Assertions.assertTrue(foundIncrementalCaseExpr,
-                "incremental stream scan should keep change type projection as CaseExpr");
+        Plan rewritePlan = PlanChecker.from(ctx)
+                .analyze("select * from test_stream.s2")
+                .rewrite()
+                .getCascadesContext()
+                .getRewritePlan();
+        LogicalProject<?> project = findStreamVirtualColumnProject(rewritePlan);
+        Assertions.assertNotNull(project);
+        Alias changeTypeAlias = findAlias(project, Column.STREAM_CHANGE_TYPE_COL);
+        Assertions.assertNotNull(changeTypeAlias);
+        Assertions.assertTrue(changeTypeAlias.child() instanceof CaseWhen);
     }
 
     @Test
@@ -482,6 +537,73 @@ public class ExplainTableStreamPlanTest extends TestWithFeService {
     }
 
     @Test
+    public void testResetFullScanUsesOutputUpdateAsEndTso() throws Exception {
+        Database db = (Database) Env.getCurrentInternalCatalog().getDbOrMetaException("test_stream");
+        OlapTable baseTable = (OlapTable) db.getTableOrMetaException("tbl_stream_base");
+        OlapTableStream stream = (OlapTableStream) db.getTableOrMetaException("s2");
+
+        ConnectContext ctx = createDefaultCtx();
+        ctx.setDatabase("test_stream");
+
+        PlanFragment fragment = getFragment(ctx, "explain select k1, k2 from test_stream.s2@reset()");
+        List<OlapScanNode> scanNodes = new ArrayList<>();
+        collectOlapScanNodes(fragment.getPlanRoot(), scanNodes);
+
+        boolean assertedAtLeastOne = false;
+        for (OlapScanNode scanNode : scanNodes) {
+            if (!(scanNode.getOlapTable() instanceof OlapTableWrapper)
+                    || scanNode.getOlapTable() instanceof RowBinlogTableWrapper) {
+                continue;
+            }
+            OlapTableWrapper wrapper = (OlapTableWrapper) scanNode.getOlapTable();
+            for (Long partitionId : scanNode.getSelectedPartitionIds()) {
+                Pair<Long, Long> resetRange = wrapper.getPartitionOffset(partitionId);
+                Assertions.assertNull(resetRange.first);
+                Assertions.assertEquals(stream.getStreamUpdate(partitionId).second, resetRange.second);
+                Assertions.assertEquals(baseTable.getPartition(partitionId).getTso(), resetRange.second);
+                assertedAtLeastOne = true;
+            }
+        }
+        Assertions.assertTrue(assertedAtLeastOne,
+                "reset full scan should use stream outputUpdateMap.next as the olap endTso");
+    }
+
+    @Test
+    public void testResetFullScanUsesCapturedEndTsoWhenLiveTsoAdvances() throws Exception {
+        Database db = (Database) Env.getCurrentInternalCatalog().getDbOrMetaException("test_stream");
+        OlapTable baseTable = (OlapTable) db.getTableOrMetaException("tbl_stream_base");
+        OlapTableStream stream = (OlapTableStream) db.getTableOrMetaException("s2");
+        Long partitionId = baseTable.getPartitionIds().get(0);
+        long liveTso = baseTable.getPartition(partitionId).getTso();
+        long capturedEndTso = liveTso - 1;
+        Pair<Long, Long> streamUpdate = stream.getStreamUpdate(partitionId);
+        Map<Long, Long> capturedPrev = streamUpdate.first == null
+                ? Map.of()
+                : Map.of(partitionId, stream.hasHistoricalData(partitionId)
+                        ? -streamUpdate.first : streamUpdate.first);
+        OlapTableStreamWrapper wrapper = new OlapTableStreamWrapper(stream, baseTable, List.of(partitionId),
+                new OlapTableStreamUpdate(capturedPrev, Map.of(partitionId, capturedEndTso)));
+        LogicalOlapTableStreamScan resetScan = new LogicalOlapTableStreamScan(
+                StatementScopeIdGenerator.newRelationId(), wrapper, List.of("test_stream"),
+                List.of(partitionId), List.of(), List.of(), Optional.empty(), List.of()).withIsReset(true);
+
+        Plan normalized = PlanChecker.from(connectContext, resetScan)
+                .applyTopDown(new NormalizeOlapTableStreamScan())
+                .getPlan();
+
+        LogicalOlapScan boundedScan = normalized.<Plan>collectToList(node -> node instanceof LogicalOlapScan).stream()
+                .map(node -> (LogicalOlapScan) node)
+                .filter(scan -> scan.getTable() instanceof OlapTableWrapper)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("bounded reset scan not found"));
+        Pair<Long, Long> resetRange = ((OlapTableWrapper) boundedScan.getTable())
+                .getPartitionOffset(partitionId);
+        Assertions.assertNotEquals(liveTso, capturedEndTso);
+        Assertions.assertNull(resetRange.first);
+        Assertions.assertEquals(capturedEndTso, resetRange.second);
+    }
+
+    @Test
     public void testMowTimeTravelQualifiedColumnCanBind() {
         // MOW time-travel goes through a union whose outputs are rebuilt with empty qualifiers.
         // The union must be wrapped in a subquery alias so qualified columns still bind.
@@ -514,17 +636,33 @@ public class ExplainTableStreamPlanTest extends TestWithFeService {
         }
     }
 
-    private LogicalProject<?> findFirstLogicalProject(Plan plan) {
-        if (plan instanceof LogicalProject) {
-            return (LogicalProject<?>) plan;
-        }
-        for (Plan child : plan.children()) {
-            LogicalProject<?> found = findFirstLogicalProject(child);
-            if (found != null) {
-                return found;
-            }
-        }
-        return null;
+    private LogicalProject<?> findStreamVirtualColumnProject(Plan plan) {
+        return plan.<Plan>collectToList(node -> node instanceof LogicalProject).stream()
+                .map(node -> (LogicalProject<?>) node)
+                .filter(project -> project.getProjects().stream()
+                        .filter(expression -> expression instanceof Alias)
+                        .map(expression -> (Alias) expression)
+                        .anyMatch(alias -> Column.STREAM_SEQ_COL.equals(alias.getName())
+                                && alias.child() instanceof SlotReference
+                                && (Column.COMMIT_TSO_COL.equals(((SlotReference) alias.child()).getName())
+                                        || Column.BINLOG_TIMESTAMP_COL.equals(
+                                                ((SlotReference) alias.child()).getName()))))
+                .filter(project -> project.getProjects().stream()
+                        .filter(expression -> expression instanceof Alias)
+                        .map(expression -> (Alias) expression)
+                        .anyMatch(alias -> Column.STREAM_CHANGE_TYPE_COL.equals(alias.getName())
+                                && (alias.child() instanceof VarcharLiteral
+                                        || alias.child() instanceof CaseWhen)))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private Alias findAlias(LogicalProject<?> project, String name) {
+        return project.getProjects().stream()
+                .filter(expression -> expression instanceof Alias && name.equals(expression.getName()))
+                .map(expression -> (Alias) expression)
+                .findFirst()
+                .orElse(null);
     }
 
     private void assertStreamScanCanBePlanned(ConnectContext ctx, String sql) {

@@ -84,6 +84,7 @@ import org.apache.doris.catalog.Type;
 import org.apache.doris.catalog.View;
 import org.apache.doris.catalog.info.PartitionNamesInfo;
 import org.apache.doris.catalog.stream.BaseTableStream;
+import org.apache.doris.catalog.stream.OlapTableStream;
 import org.apache.doris.catalog.stream.TableStreamBuildFactory;
 import org.apache.doris.clone.DynamicPartitionScheduler;
 import org.apache.doris.cloud.catalog.CloudEnv;
@@ -1049,12 +1050,22 @@ public class InternalCatalog implements CatalogIf<Database> {
                 Set<BaseTableInfo> baseTables = relation.getBaseTables();
                 if (baseTables != null) {
                     for (BaseTableInfo baseTableInfo : baseTables) {
-                        String streamName = IvmUtil.streamName(mtmv.getId(), baseTableInfo.getTableName());
-                        TableIf streamTable = db.getTableNullable(streamName);
-                        if (streamTable != null) {
-                            unprotectDropTable(db, (Table) streamTable, isForceDrop, isReplay, 0L);
-                            LOG.info("dropped stream {} associated with MTMV {}", streamName, mtmv.getName());
+                        OlapTableStream stream;
+                        try {
+                            TableIf baseTable = MTMVUtil.getTable(baseTableInfo);
+                            if (!(baseTable instanceof OlapTable)) {
+                                LOG.warn("skip dropping IVM stream for unsupported base table {}", baseTableInfo);
+                                continue;
+                            }
+                            stream = IvmUtil.getIvmStream(mtmv, (OlapTable) baseTable);
+                        } catch (Exception e) {
+                            // Fail closed: an unresolved or mismatched object must never be deleted by name alone.
+                            LOG.warn("skip dropping unresolved IVM stream for MTMV {} base table {}",
+                                    mtmv.getName(), baseTableInfo, e);
+                            continue;
                         }
+                        unprotectDropTable(db, stream, isForceDrop, isReplay, 0L);
+                        LOG.info("dropped stream {} associated with MTMV {}", stream.getName(), mtmv.getName());
                     }
                 }
             }

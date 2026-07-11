@@ -48,7 +48,8 @@ import org.apache.doris.datasource.ExternalTable;
 import org.apache.doris.job.exception.JobException;
 import org.apache.doris.job.task.AbstractTask;
 import org.apache.doris.mtmv.MTMVPartitionInfo.MTMVPartitionType;
-import org.apache.doris.mtmv.ivm.IvmNormalizeResult;
+import org.apache.doris.mtmv.ivm.IvmRewriteContext;
+import org.apache.doris.mtmv.ivm.IvmRewriteResult;
 import org.apache.doris.mtmv.ivm.IvmUtil;
 import org.apache.doris.nereids.NereidsPlanner;
 import org.apache.doris.nereids.StatementContext;
@@ -152,19 +153,19 @@ public class MTMVPlanUtil {
      * Creates a new MTMV ConnectContext internally. Callers that need the ConnectContext
      * to exist before the StatementContext is constructed (so that {@code new StatementContext()}
      * captures the correct thread-local) should use
-     * {@link #executeCommand(ConnectContext, Command, StatementContext, String, boolean)} instead.
+     * {@link #executeCommand(ConnectContext, Command, StatementContext, String)} instead.
      */
     public static StmtExecutor executeCommand(MTMV mtmv, Command command,
-            StatementContext stmtCtx, @Nullable String auditStmt, boolean enableIvmNormalMTMVPlan) throws Exception {
-        return executeCommand(mtmv, command, stmtCtx, auditStmt, enableIvmNormalMTMVPlan, null);
+            StatementContext stmtCtx, @Nullable String auditStmt) throws Exception {
+        return executeCommand(mtmv, command, stmtCtx, auditStmt, null);
     }
 
     public static StmtExecutor executeCommand(MTMV mtmv, Command command,
-            StatementContext stmtCtx, @Nullable String auditStmt, boolean enableIvmNormalMTMVPlan,
+            StatementContext stmtCtx, @Nullable String auditStmt,
             @Nullable Consumer<ConnectContext> ctxCustomizer) throws Exception {
         ConnectContext ctx = createMTMVContext(mtmv, DISABLE_RULES_WHEN_RUN_MTMV_TASK);
         stmtCtx.setConnectContext(ctx);
-        return executeCommand(ctx, command, stmtCtx, auditStmt, enableIvmNormalMTMVPlan, ctxCustomizer);
+        return executeCommand(ctx, command, stmtCtx, auditStmt, ctxCustomizer);
     }
 
     /**
@@ -173,18 +174,17 @@ public class MTMVPlanUtil {
      * so that {@code new StatementContext()} captures the correct thread-local ConnectContext.
      */
     public static StmtExecutor executeCommand(ConnectContext ctx, Command command,
-            StatementContext stmtCtx, @Nullable String auditStmt, boolean enableIvmNormalMTMVPlan) throws Exception {
-        return executeCommand(ctx, command, stmtCtx, auditStmt, enableIvmNormalMTMVPlan, null);
+            StatementContext stmtCtx, @Nullable String auditStmt) throws Exception {
+        return executeCommand(ctx, command, stmtCtx, auditStmt, null);
     }
 
     public static StmtExecutor executeCommand(ConnectContext ctx, Command command,
-            StatementContext stmtCtx, @Nullable String auditStmt, boolean enableIvmNormalMTMVPlan,
+            StatementContext stmtCtx, @Nullable String auditStmt,
             @Nullable Consumer<ConnectContext> ctxCustomizer) throws Exception {
         ctx.setStatementContext(stmtCtx);
         ctx.getState().setNereids(true);
         ctx.getSessionVariable().setEnableMaterializedViewRewrite(false);
         ctx.getSessionVariable().setEnableDmlMaterializedViewRewrite(false);
-        ctx.getSessionVariable().setEnableIvmNormalRewrite(enableIvmNormalMTMVPlan);
         if (ctxCustomizer != null) {
             ctxCustomizer.accept(ctx);
         }
@@ -486,7 +486,7 @@ public class MTMVPlanUtil {
     }
 
     public static MTMVAnalyzeQueryInfo analyzeQueryWithSql(MTMV mtmv, ConnectContext ctx,
-            boolean isIvm) throws UserException {
+            Optional<IvmRewriteContext> ivmRewriteContext) throws UserException {
         String querySql = mtmv.getQuerySql();
         MTMVPartitionInfo mvPartitionInfo = mtmv.getMvPartitionInfo();
         MTMVPartitionDefinition mtmvPartitionDefinition = new MTMVPartitionDefinition();
@@ -514,34 +514,30 @@ public class MTMVPlanUtil {
                 DistributionInfoType.HASH), defaultDistributionInfo.getAutoBucket(),
                 defaultDistributionInfo.getBucketNum(), Lists.newArrayList(mtmv.getDistributionColumnNames()));
         return analyzeQuery(ctx, mtmv.getMvProperties(), mtmvPartitionDefinition, distribution, null,
-                Maps.newHashMap(mtmv.getTableProperty().getProperties()), keys, logicalPlan, isIvm);
+                Maps.newHashMap(mtmv.getTableProperty().getProperties()), keys, logicalPlan, ivmRewriteContext);
     }
 
     public static MTMVAnalyzeQueryInfo analyzeQuery(ConnectContext ctx, Map<String, String> mvProperties,
             MTMVPartitionDefinition mvPartitionDefinition, DistributionDescriptor distribution,
             List<SimpleColumnDefinition> simpleColumnDefinitions, Map<String, String> properties, List<String> keys,
-            LogicalPlan logicalQuery, boolean isIvm) throws UserException {
-        if (!isIvm) {
-            return analyzeQueryInternal(ctx, mvProperties, mvPartitionDefinition, distribution,
-                    simpleColumnDefinitions, properties, keys, logicalQuery, false, Sets.newHashSet());
-        }
-        MTMVAnalyzeQueryInfo queryInfo = analyzeQueryInternal(ctx, mvProperties, mvPartitionDefinition, distribution,
-                simpleColumnDefinitions, properties, keys, logicalQuery, true,
-                getExcludedTriggerTables(mvProperties));
-        return queryInfo;
+            LogicalPlan logicalQuery, Optional<IvmRewriteContext> ivmRewriteContext) throws UserException {
+        return analyzeQueryInternal(ctx, mvProperties, mvPartitionDefinition, distribution,
+                simpleColumnDefinitions, properties, keys, logicalQuery, ivmRewriteContext);
     }
 
     private static MTMVAnalyzeQueryInfo analyzeQueryInternal(ConnectContext ctx, Map<String, String> mvProperties,
             MTMVPartitionDefinition mvPartitionDefinition, DistributionDescriptor distribution,
             List<SimpleColumnDefinition> simpleColumnDefinitions, Map<String, String> properties, List<String> keys,
-            LogicalPlan logicalQuery, boolean isIvm, Set<TableNameInfo> excludedTriggerTables)
+            LogicalPlan logicalQuery, Optional<IvmRewriteContext> ivmRewriteContext)
             throws UserException {
+        boolean isIvm = ivmRewriteContext.isPresent();
+        Set<TableNameInfo> excludedTriggerTables = getExcludedTriggerTables(mvProperties);
         // Reuse the StatementContext already on the ConnectContext (set by NereidsParser during
-        // SQL parsing or by the user session). Do NOT create a new StatementContext here — the
-        // IVM refresh pipeline reads ExprId tracking from ctx.getStatementContext() after this
-        // method returns (IvmRefreshManager.doRefreshInternal reads exprIdStart). Creating a
-        // separate StatementContext and restoring the original would lose ExprId allocations.
+        // SQL parsing or by the user session). Do NOT create a new StatementContext here.
+        // IVM planning needs ExprId allocations and other statement-local state to stay on the
+        // same StatementContext for the whole analyze flow.
         try (StatementContext statementContext = ctx.getStatementContext()) {
+            statementContext.setIvmRewriteContext(ivmRewriteContext);
             statementContext.setExcludedTriggerTables(excludedTriggerTables);
             NereidsPlanner planner = new NereidsPlanner(statementContext);
             // this is for expression column name infer when not use alias
@@ -555,17 +551,11 @@ public class MTMVPlanUtil {
             try {
                 // must disable constant folding by be, because be constant folding may return wrong type
                 ctx.getSessionVariable().setVarOnce(SessionVariable.ENABLE_FOLD_CONSTANT_BY_BE, "false");
-                if (isIvm) {
-                    ctx.getSessionVariable().setVarOnce(SessionVariable.ENABLE_IVM_NORMAL_REWRITE, "true");
-                }
                 plan = planner.planWithLock(logicalSink, PhysicalProperties.ANY, ExplainLevel.ALL_PLAN);
             } finally {
                 // after operate, roll back the disable rules
                 ctx.getSessionVariable().setDisableNereidsRules(String.join(",", tempDisableRules));
                 statementContext.invalidCache(SessionVariable.DISABLE_NEREIDS_RULES);
-                if (isIvm) {
-                    ctx.getSessionVariable().setVarOnce(SessionVariable.ENABLE_IVM_NORMAL_REWRITE, "false");
-                }
             }
             Plan analyzedPlan = planner.getAnalyzedPlan();
             // can not contain Random function
@@ -597,9 +587,9 @@ public class MTMVPlanUtil {
                     (distribution == null || CollectionUtils.isEmpty(distribution.getCols())) ? Sets.newHashSet()
                             : Sets.newHashSet(distribution.getCols()),
                     simpleColumnDefinitions, properties);
-            Optional<IvmNormalizeResult> ivmNormalizeResult = planner.getCascadesContext().getIvmNormalizeResult();
+            Optional<IvmRewriteResult> ivmRewriteResult = planner.getCascadesContext().getIvmRewriteResult();
             keys = analyzeKeys(keys, properties, columns, isIvm, mvPartitionInfo, distribution,
-                    ivmNormalizeResult.orElse(null));
+                    ivmRewriteResult.orElse(null));
             properties = CreateTableInfo.addOlapHiddenColumns(
                     columns, isIvm ? KeysType.UNIQUE_KEYS : KeysType.DUP_KEYS,
                     isIvm, properties, false);
@@ -611,7 +601,7 @@ public class MTMVPlanUtil {
             MTMVAnalyzeQueryInfo queryInfo = new MTMVAnalyzeQueryInfo(columns, keys, mvPartitionInfo, relation,
                     properties);
             if (isIvm) {
-                ivmNormalizeResult.ifPresent(queryInfo::setIvmNormalizeResult);
+                ivmRewriteResult.ifPresent(queryInfo::setIvmRewriteResult);
             }
             return queryInfo;
         }
@@ -670,9 +660,9 @@ public class MTMVPlanUtil {
 
     private static List<String> analyzeKeys(List<String> keys, Map<String, String> properties,
             List<ColumnDefinition> columns, boolean isIvm, MTMVPartitionInfo mvPartitionInfo,
-            DistributionDescriptor distribution, IvmNormalizeResult ivmNormalizeResult) {
+            DistributionDescriptor distribution, IvmRewriteResult ivmRewriteResult) {
         if (isIvm) {
-            return analyzeIvmKeys(keys, columns, mvPartitionInfo, distribution, ivmNormalizeResult);
+            return analyzeIvmKeys(keys, columns, mvPartitionInfo, distribution, ivmRewriteResult);
         }
         boolean enableDuplicateWithoutKeysByDefault = false;
         try {
@@ -716,7 +706,7 @@ public class MTMVPlanUtil {
 
     private static List<String> analyzeIvmKeys(List<String> keys, List<ColumnDefinition> columns,
             MTMVPartitionInfo mvPartitionInfo, DistributionDescriptor distribution,
-            IvmNormalizeResult ivmNormalizeResult) {
+            IvmRewriteResult ivmRewriteResult) {
         Map<String, ColumnDefinition> columnMap = columns.stream()
                 .collect(Collectors.toMap(ColumnDefinition::getName, column -> column,
                         (left, right) -> left, () -> new TreeMap<>(String.CASE_INSENSITIVE_ORDER)));
@@ -751,7 +741,7 @@ public class MTMVPlanUtil {
         }
         LinkedHashSet<String> finalKeys = new LinkedHashSet<>(visibleKeys);
         addIvmFinalKey(finalKeys, Column.IVM_ROW_ID_COL);
-        validateIvmAggregateKeys(finalKeys, visibleColumns, ivmNormalizeResult);
+        validateIvmAggregateKeys(finalKeys, visibleColumns, ivmRewriteResult);
         validateIvmVisibleKeyPrefix(Lists.newArrayList(visibleKeys), visibleOutputNames, hasExplicitKeys);
         applyIvmPhysicalKeyLayout(columns, columnMap, Lists.newArrayList(visibleKeys), Lists.newArrayList(finalKeys));
         return Lists.newArrayList(finalKeys);
@@ -861,8 +851,8 @@ public class MTMVPlanUtil {
     }
 
     private static void validateIvmAggregateKeys(Set<String> keySet, List<ColumnDefinition> visibleColumns,
-            IvmNormalizeResult ivmNormalizeResult) {
-        if (ivmNormalizeResult == null || !ivmNormalizeResult.isAggMv()) {
+            IvmRewriteResult ivmRewriteResult) {
+        if (ivmRewriteResult == null || !ivmRewriteResult.isAggMv()) {
             return;
         }
         List<String> visibleKeys = keySet.stream()
@@ -872,7 +862,7 @@ public class MTMVPlanUtil {
             return;
         }
 
-        Plan normalizedPlan = Preconditions.checkNotNull(ivmNormalizeResult.getNormalizedPlan(),
+        Plan normalizedPlan = Preconditions.checkNotNull(ivmRewriteResult.getNormalizedPlan(),
                 "IVM aggregate key validation requires normalized plan");
         Map<String, Slot> visibleOutputSlotByColumn = buildVisibleOutputSlotByColumn(visibleColumns, normalizedPlan);
 
@@ -947,7 +937,8 @@ public class MTMVPlanUtil {
     public static void ensureMTMVQueryUsable(MTMV mtmv, ConnectContext ctx) throws JobException {
         MTMVAnalyzeQueryInfo mtmvAnalyzedQueryInfo;
         try {
-            mtmvAnalyzedQueryInfo = MTMVPlanUtil.analyzeQueryWithSql(mtmv, ctx, mtmv.isIvm());
+            mtmvAnalyzedQueryInfo = MTMVPlanUtil.analyzeQueryWithSql(mtmv, ctx,
+                    mtmv.isIvm() ? Optional.of(IvmRewriteContext.normalize(mtmv)) : Optional.empty());
         } catch (Exception e) {
             throw new JobException(e.getMessage(), e);
         }

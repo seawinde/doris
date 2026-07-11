@@ -28,6 +28,7 @@ import org.apache.doris.catalog.Partition;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.View;
 import org.apache.doris.catalog.info.TableNameInfo;
+import org.apache.doris.catalog.stream.OlapTableStreamUpdate;
 import org.apache.doris.common.Id;
 import org.apache.doris.common.IdGenerator;
 import org.apache.doris.common.Pair;
@@ -37,6 +38,7 @@ import org.apache.doris.datasource.mvcc.MvccTable;
 import org.apache.doris.datasource.mvcc.MvccTableInfo;
 import org.apache.doris.foundation.format.FormatOptions;
 import org.apache.doris.mtmv.BaseTableInfo;
+import org.apache.doris.mtmv.ivm.IvmRewriteContext;
 import org.apache.doris.nereids.analyzer.UnboundRelation;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.hint.Hint;
@@ -95,6 +97,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.Set;
@@ -122,7 +125,41 @@ public class StatementContext implements Closeable {
         MTMV
     }
 
+    /** Scan mode used by IVM fallback stream scan replacement. */
+    public enum IvmFallbackStreamScanMode {
+        RESET,
+        SNAPSHOT
+    }
+
+    /**
+     * Analyzer payload for one base table in IVM fallback refresh.
+     *
+     * <p>When this context exists, {@code IvmFullRefreshMtmv} rewrites the base table OLAP scan to the
+     * corresponding internal stream scan. RESET scans advance the stream offset through the insert
+     * transaction path; SNAPSHOT scans only read the previously established stream point.
+     */
+    public static class IvmFallbackStreamScanContext {
+        private final IvmFallbackStreamScanMode scanMode;
+        private final OlapTableStreamUpdate capturedUpdate;
+
+        public IvmFallbackStreamScanContext(IvmFallbackStreamScanMode scanMode,
+                OlapTableStreamUpdate capturedUpdate) {
+            this.scanMode = Objects.requireNonNull(scanMode, "scanMode can not be null");
+            this.capturedUpdate = new OlapTableStreamUpdate(
+                    Objects.requireNonNull(capturedUpdate, "capturedUpdate can not be null"));
+        }
+
+        public IvmFallbackStreamScanMode getScanMode() {
+            return scanMode;
+        }
+
+        public OlapTableStreamUpdate getCapturedUpdate() {
+            return new OlapTableStreamUpdate(capturedUpdate);
+        }
+    }
+
     private ConnectContext connectContext;
+    private Optional<IvmRewriteContext> ivmRewriteContext = Optional.empty();
 
     private final Stopwatch stopwatch = Stopwatch.createUnstarted();
     private final Stopwatch materializedViewStopwatch = Stopwatch.createUnstarted();
@@ -270,6 +307,10 @@ public class StatementContext implements Closeable {
     private Backend groupCommitMergeBackend;
 
     private final Map<MvccTableInfo, MvccSnapshot> snapshots = Maps.newHashMap();
+    // MTMV refresh can bind OLAP scans to captured per-partition TSO ranges.
+    // This is intentionally narrow and is not a general time-travel API.
+    private final Map<BaseTableInfo, Map<Long, Pair<Long, Long>>> mtmvOlapTableTsoRanges = Maps.newHashMap();
+    private final Map<BaseTableInfo, IvmFallbackStreamScanContext> ivmFallbackStreamScanContexts = Maps.newHashMap();
     // Record external tables that can be preloaded before internal table locks are acquired.
     private final Map<Long, ExternalTablePreloadInfo> externalTablePreloadInfos = new LinkedHashMap<>();
     private ExternalMetadataPreloadResult externalMetadataPreloadResult;
@@ -488,6 +529,14 @@ public class StatementContext implements Closeable {
 
     public ConnectContext getConnectContext() {
         return connectContext;
+    }
+
+    public Optional<IvmRewriteContext> getIvmRewriteContext() {
+        return ivmRewriteContext;
+    }
+
+    public void setIvmRewriteContext(Optional<IvmRewriteContext> ivmRewriteContext) {
+        this.ivmRewriteContext = Objects.requireNonNull(ivmRewriteContext, "ivmRewriteContext can not be null");
     }
 
     public Set<String> getUsedAIResourceNames() {
@@ -1272,6 +1321,29 @@ public class StatementContext implements Closeable {
     public void setMvRefreshPredicates(
             Map<TableIf, Set<Expression>> mvRefreshPredicates) {
         this.mvRefreshPredicates = Optional.of(mvRefreshPredicates);
+    }
+
+    public Optional<Map<Long, Pair<Long, Long>>> getMtmvOlapTableTsoRange(BaseTableInfo baseTableInfo) {
+        return Optional.ofNullable(mtmvOlapTableTsoRanges.get(baseTableInfo));
+    }
+
+    public void setMtmvOlapTableTsoRanges(Map<BaseTableInfo, Map<Long, Pair<Long, Long>>> tsoRanges) {
+        mtmvOlapTableTsoRanges.clear();
+        mtmvOlapTableTsoRanges.putAll(tsoRanges);
+    }
+
+    public boolean hasIvmFallbackStreamScanContexts() {
+        return !ivmFallbackStreamScanContexts.isEmpty();
+    }
+
+    public Optional<IvmFallbackStreamScanContext> getIvmFallbackStreamScanContext(BaseTableInfo baseTableInfo) {
+        return Optional.ofNullable(ivmFallbackStreamScanContexts.get(baseTableInfo));
+    }
+
+    public void setIvmFallbackStreamScanContexts(
+            Map<BaseTableInfo, IvmFallbackStreamScanContext> scanContexts) {
+        ivmFallbackStreamScanContexts.clear();
+        ivmFallbackStreamScanContexts.putAll(scanContexts);
     }
 
     /**

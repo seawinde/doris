@@ -94,6 +94,8 @@ public class MTMV extends OlapTable {
     private MTMVRefreshSnapshot refreshSnapshot;
     @SerializedName("ii")
     private IvmInfo ivmInfo;
+    // In-process token used to detect metadata changes during a multi-transaction COMPLETE refresh.
+    private transient long ivmBinlogBrokenGeneration;
     // Should update after every fresh, not persist
     // Cache with SessionVarGuardExpr: used when query session variables differ from MV creation variables
     private MTMVCache cacheWithGuard;
@@ -505,6 +507,7 @@ public class MTMV extends OlapTable {
     public boolean markIvmBinlogBroken() {
         writeMvLock();
         try {
+            ivmBinlogBrokenGeneration++;
             if (ivmInfo == null) {
                 ivmInfo = new IvmInfo();
             }
@@ -515,6 +518,15 @@ public class MTMV extends OlapTable {
             return true;
         } finally {
             writeMvUnlock();
+        }
+    }
+
+    public long getIvmBinlogBrokenGeneration() {
+        readMvLock();
+        try {
+            return ivmBinlogBrokenGeneration;
+        } finally {
+            readMvUnlock();
         }
     }
 

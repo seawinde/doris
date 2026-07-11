@@ -443,7 +443,6 @@ public class SessionVariable implements Serializable, Writable {
 
     public static final String NEREIDS_CBO_PENALTY_FACTOR = "nereids_cbo_penalty_factor";
     public static final String ENABLE_NEREIDS_TRACE = "enable_nereids_trace";
-    public static final String ENABLE_IVM_NORMAL_REWRITE = "enable_ivm_normal_rewrite";
     public static final String ENABLE_EXPR_TRACE = "enable_expr_trace";
 
     public static final String ENABLE_DPHYP_TRACE = "enable_dphyp_trace";
@@ -2109,9 +2108,6 @@ public class SessionVariable implements Serializable, Writable {
 
     @VarAttrDef.VarAttr(name = NEREIDS_CBO_PENALTY_FACTOR, needForward = true)
     private double nereidsCboPenaltyFactor = 0.7;
-
-    @VarAttrDef.VarAttr(name = ENABLE_IVM_NORMAL_REWRITE)
-    private boolean enableIvmNormalRewrite = false;
 
     @VarAttrDef.VarAttr(name = ENABLE_NEREIDS_TRACE)
     private boolean enableNereidsTrace = false;
@@ -4044,10 +4040,6 @@ public class SessionVariable implements Serializable, Writable {
         this.enableNereidsTrace = enableNereidsTrace;
     }
 
-    public void setEnableIvmNormalRewrite(boolean enableIvmNormalRewrite) {
-        this.enableIvmNormalRewrite = enableIvmNormalRewrite;
-    }
-
     public void setNereidsTraceEventMode(String nereidsTraceEventMode) {
         checkNereidsTraceEventMode(nereidsTraceEventMode);
         this.nereidsTraceEventMode = nereidsTraceEventMode;
@@ -5329,10 +5321,6 @@ public class SessionVariable implements Serializable, Writable {
 
     public boolean isEnableNereidsTrace() {
         return enableNereidsTrace;
-    }
-
-    public boolean isEnableIvmNormalRewrite() {
-        return enableIvmNormalRewrite;
     }
 
     public void setEnableExprTrace(boolean enableExprTrace) {

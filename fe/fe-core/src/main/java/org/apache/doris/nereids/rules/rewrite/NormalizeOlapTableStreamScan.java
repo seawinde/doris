@@ -40,6 +40,8 @@ import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.StatementScopeIdGenerator;
 import org.apache.doris.nereids.trees.expressions.WhenClause;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.NonNullable;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.Nullable;
 import org.apache.doris.nereids.trees.expressions.literal.BigIntLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.TinyIntLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.VarcharLiteral;
@@ -92,6 +94,23 @@ public class NormalizeOlapTableStreamScan extends OneRewriteRuleFactory {
                         new VarcharLiteral("UPDATE_AFTER"))), new VarcharLiteral("UNKNOWN"));
     }
 
+    private static boolean isStreamChangeTypeSlot(Slot slot) {
+        return isStreamVirtualSlot(slot, Column.STREAM_CHANGE_TYPE_COL, Column.STREAM_CHANGE_TYPE_VIRTUAL_COLUMN);
+    }
+
+    private static boolean isStreamSeqSlot(Slot slot) {
+        return isStreamVirtualSlot(slot, Column.STREAM_SEQ_COL, Column.STREAM_SEQ_VIRTUAL_COLUMN);
+    }
+
+    private static boolean isStreamVirtualSlot(Slot slot, String name, Column virtualColumn) {
+        if (slot instanceof SlotReference
+                && ((SlotReference) slot).getOriginalColumn().isPresent()
+                && ((SlotReference) slot).getOriginalColumn().get().equals(virtualColumn)) {
+            return true;
+        }
+        return slot.getName().equals(name);
+    }
+
     private Plan normalize(LogicalOlapTableStreamScan scan, CascadesContext cascadesContext) {
         // short-cut for empty partition
         if (scan.getSelectedPartitionIds().isEmpty()) {
@@ -123,7 +142,12 @@ public class NormalizeOlapTableStreamScan extends OneRewriteRuleFactory {
             Preconditions.checkArgument(match != null,
                     "column %s not found in child output", wanted.getName());
             if (useOriginalExprIds) {
-                project.add(new Alias(wanted.getExprId(), match, wanted.getName()));
+                Expression projectedExpression = match;
+                if (match.nullable() != wanted.nullable()) {
+                    projectedExpression = wanted.nullable() ? new Nullable(match) : new NonNullable(match);
+                }
+                project.add(new Alias(wanted.getExprId(), ImmutableList.of(projectedExpression), wanted.getName(),
+                        wanted.getQualifier(), false));
             } else {
                 project.add(new Alias(match, wanted.getName()));
             }
@@ -193,16 +217,10 @@ public class NormalizeOlapTableStreamScan extends OneRewriteRuleFactory {
         if (isIncremental) {
             // replace stream virtual column with alias slot reference
             for (Slot slot : originSlots) {
-                if (slot instanceof SlotReference
-                        && ((SlotReference) slot).getOriginalColumn().isPresent()
-                        && ((SlotReference) slot).getOriginalColumn().get()
-                        .equals(Column.STREAM_CHANGE_TYPE_VIRTUAL_COLUMN)) {
+                if (isStreamChangeTypeSlot(slot)) {
                     project.add(new Alias(StatementScopeIdGenerator.newExprId(), buildChangeTypeExpr(opSlot),
                             Column.STREAM_CHANGE_TYPE_COL));
-                } else if (slot instanceof SlotReference
-                        && ((SlotReference) slot).getOriginalColumn().isPresent()
-                        && ((SlotReference) slot).getOriginalColumn().get()
-                        .equals(Column.STREAM_SEQ_VIRTUAL_COLUMN)) {
+                } else if (isStreamSeqSlot(slot)) {
                     project.add(new Alias(StatementScopeIdGenerator.newExprId(), seqSlot, Column.STREAM_SEQ_COL));
                 }
             }
@@ -221,12 +239,24 @@ public class NormalizeOlapTableStreamScan extends OneRewriteRuleFactory {
      * Reset mode: the stream is (re)initialized to a full snapshot of the base table, so we simply
      * do a full olap scan over the base table (with full schema) and project back to the origin
      * stream output slots. No binlog / virtual columns are involved.
+     *
+     * <p>The full scan end TSO must be the same TSO recorded in the stream update map. Otherwise the
+     * refresh could read rows newer than the offset that will be committed after the insert succeeds.
      */
     private Plan makeResetOlapFullScan(LogicalOlapTableStreamScan scan, CascadesContext cascadesContext) {
-        // make olap scan on base table
         OlapTableStreamWrapper streamWrapper = scan.getTable();
         OlapTable baseTable = streamWrapper.getBaseTable();
-        Plan plan = makeOlapScanOnBaseTable(scan, cascadesContext, baseTable, scan.getSelectedPartitionIds());
+        Set<Long> selectedPartitionIds = ImmutableSet.copyOf(scan.getSelectedPartitionIds());
+        Map<Long, Pair<Long, Long>> resetReadRanges = streamWrapper.getOutputUpdateMap().entrySet().stream()
+                .filter(entry -> selectedPartitionIds.contains(entry.getKey()))
+                .collect(Collectors.toMap(Map.Entry::getKey, entry -> Pair.of(null, entry.getValue().second)));
+        if (resetReadRanges.isEmpty()) {
+            return new LogicalEmptyRelation(cascadesContext.getStatementContext().getNextRelationId(),
+                    scan.getOutput());
+        }
+        OlapTableWrapper table = new OlapTableWrapper(baseTable, resetReadRanges);
+        Plan plan = makeOlapScanOnBaseTable(scan, cascadesContext, table,
+                Lists.newArrayList(resetReadRanges.keySet()));
         return projectToOriginSlots(plan, scan.getOutput());
     }
 
@@ -341,14 +371,8 @@ public class NormalizeOlapTableStreamScan extends OneRewriteRuleFactory {
         List<Slot> originSlots = scan.getOutput();
         // notVirtualSlots = originSlots - (STREAM_CHANGE_TYPE_VIRTUAL_COLUMN + STREAM_SEQ_VIRTUAL_COLUMN)
         List<Slot> notVirtualSlots = originSlots.stream()
-                .filter(slot -> !(slot instanceof SlotReference
-                        && ((SlotReference) slot).getOriginalColumn().isPresent()
-                        && ((SlotReference) slot).getOriginalColumn().get()
-                        .equals(Column.STREAM_CHANGE_TYPE_VIRTUAL_COLUMN)))
-                .filter(slot -> !(slot instanceof SlotReference
-                        && ((SlotReference) slot).getOriginalColumn().isPresent()
-                        && ((SlotReference) slot).getOriginalColumn().get()
-                        .equals(Column.STREAM_SEQ_VIRTUAL_COLUMN)))
+                .filter(slot -> !isStreamChangeTypeSlot(slot))
+                .filter(slot -> !isStreamSeqSlot(slot))
                 .collect(ImmutableList.toImmutableList());
 
         // history plan
@@ -368,17 +392,11 @@ public class NormalizeOlapTableStreamScan extends OneRewriteRuleFactory {
             Preconditions.checkArgument(tsoSlot != null, "Commit tso column not found in base table output");
             List<NamedExpression> project = mapOriginOutputFromChild(notVirtualSlots, baseOutputSlots, false);
             for (Slot slot : originSlots) {
-                if (slot instanceof SlotReference
-                        && ((SlotReference) slot).getOriginalColumn().isPresent()
-                        && ((SlotReference) slot).getOriginalColumn().get()
-                        .equals(Column.STREAM_CHANGE_TYPE_VIRTUAL_COLUMN)) {
+                if (isStreamChangeTypeSlot(slot)) {
                     project.add(new Alias(StatementScopeIdGenerator.newExprId(), new VarcharLiteral("APPEND"),
                             Column.STREAM_CHANGE_TYPE_COL));
                 }
-                if (slot instanceof SlotReference
-                        && ((SlotReference) slot).getOriginalColumn().isPresent()
-                        && ((SlotReference) slot).getOriginalColumn().get()
-                        .equals(Column.STREAM_SEQ_VIRTUAL_COLUMN)) {
+                if (isStreamSeqSlot(slot)) {
                     project.add(new Alias(StatementScopeIdGenerator.newExprId(), tsoSlot, Column.STREAM_SEQ_COL));
                 }
             }
