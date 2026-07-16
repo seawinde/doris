@@ -298,8 +298,8 @@ TEST_F(GroupRowsetWriterTest, partialUpdateSkipsHiddenNonKeyColumns) {
 
     auto lsn_buffer = AutoIncIDBuffer::create_shared(1, 1, kBinlogLsnAutoIncId);
     lsn_buffer->append_range_for_test(1000, 1);
-    std::shared_ptr<std::vector<int64_t>> lsn_ids;
-    ASSERT_TRUE(allocate_binlog_lsn(lsn_buffer, 1, &lsn_ids).ok());
+    auto lsn_ids = std::make_shared<std::vector<int64_t>>();
+    ASSERT_TRUE(allocate_binlog_lsn(lsn_buffer, 1, *lsn_ids).ok());
     binlog_options.insert_seg_lsn(0, lsn_ids);
 
     auto row_binlog_writer_res = _tablet->create_rowset_writer(row_binlog_context, false);
