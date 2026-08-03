@@ -47,6 +47,8 @@ import org.apache.doris.mtmv.ivm.IvmInfo;
 import org.apache.doris.mtmv.ivm.IvmPlanSignature;
 import org.apache.doris.mtmv.ivm.IvmPlanSignatureGenerator;
 import org.apache.doris.mtmv.ivm.IvmRewriteResult;
+import org.apache.doris.nereids.CascadesContext;
+import org.apache.doris.nereids.NereidsPlanner;
 import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
 import org.apache.doris.nereids.trees.plans.commands.UpdateMvByPartitionCommand;
@@ -798,6 +800,41 @@ public class MTMVTaskTest {
     }
 
     @Test
+    public void testSignatureMismatchCompleteCapturesConsistentPlanSignature() throws Exception {
+        MTMVTask task = new MTMVTask(mtmv, relation, new MTMVTaskContext(MTMVTaskTriggerMode.MANUAL));
+        Deencapsulation.setField(task, "ivmFallbackReason", IvmFailureReason.PLAN_SIGNATURE_MISMATCH.name());
+        IvmPlanSignature signature = new IvmPlanSignature("layout_s2", "signature_s2");
+
+        executeCompleteRefresh(task, signature, signature);
+
+        Assert.assertEquals("signature_s2", task.getRefreshedIvmPlanSignature());
+    }
+
+    @Test
+    public void testSignatureMismatchCompleteRejectsInconsistentBatchSignatures() {
+        MTMVTask task = new MTMVTask(mtmv, relation, new MTMVTaskContext(MTMVTaskTriggerMode.MANUAL));
+        Deencapsulation.setField(task, "ivmFallbackReason", IvmFailureReason.PLAN_SIGNATURE_MISMATCH.name());
+
+        JobException exception = Assert.assertThrows(JobException.class, () -> executeCompleteRefresh(task,
+                new IvmPlanSignature("layout_s2", "signature_s2"),
+                new IvmPlanSignature("layout_s3", "signature_s3")));
+
+        Assert.assertTrue(exception.getMessage().contains("inconsistent plan signatures"));
+        Assert.assertNull(task.getRefreshedIvmPlanSignature());
+    }
+
+    @Test
+    public void testOtherCompleteFallbackDoesNotCapturePlanSignature() throws Exception {
+        MTMVTask task = new MTMVTask(mtmv, relation, new MTMVTaskContext(MTMVTaskTriggerMode.MANUAL));
+        Deencapsulation.setField(task, "ivmFallbackReason", IvmFailureReason.BINLOG_BROKEN.name());
+        IvmPlanSignature signature = new IvmPlanSignature("layout_s2", "signature_s2");
+
+        executeCompleteRefresh(task, signature, signature);
+
+        Assert.assertNull(task.getRefreshedIvmPlanSignature());
+    }
+
+    @Test
     public void testIvmExecutionFailureFallsBackToPartitions() throws Exception {
         Mockito.when(mtmv.isIvm()).thenReturn(true);
         Mockito.when(mtmv.getName()).thenReturn("test_mv");
@@ -853,6 +890,60 @@ public class MTMVTaskTest {
         outputs.addAll(scan.getOutput());
         LogicalProject<?> project = new LogicalProject<>(outputs, scan);
         return new LogicalResultSink<>(outputs, project);
+    }
+
+    private void executeCompleteRefresh(MTMVTask task, IvmPlanSignature firstBatchSignature,
+            IvmPlanSignature secondBatchSignature) throws Exception {
+        Mockito.when(mtmv.isIvm()).thenReturn(true);
+        Mockito.when(mtmv.getName()).thenReturn("test_mv");
+        Mockito.when(mtmv.getRefreshPartitionNum()).thenReturn(1);
+        Mockito.when(mtmvPartitionInfo.getPctInfos()).thenReturn(Collections.emptyList());
+        DatabaseIf database = Mockito.mock(DatabaseIf.class);
+        Mockito.when(database.getFullName()).thenReturn("test_db");
+        Mockito.when(mtmv.getDatabase()).thenReturn(database);
+
+        MTMVRefreshContext refreshContext = Mockito.mock(MTMVRefreshContext.class);
+        Mockito.when(refreshContext.getByPartitionName(Mockito.anyString())).thenReturn(Collections.emptyMap());
+        mtmvPartitionUtilStatic.when(() -> MTMVPartitionUtil.generatePartitionSnapshots(
+                Mockito.same(refreshContext), Mockito.anySet(), Mockito.anySet()))
+                .thenReturn(Collections.emptyMap());
+        Deencapsulation.setField(task, "needRefreshPartitions", Lists.newArrayList(poneName, ptwoName));
+
+        ConnectContext mtmvCtx = new ConnectContext();
+        mtmvCtx.setQueryId(new TUniqueId(1L, 2L));
+        mtmvCtx.setThreadLocalInfo();
+        UpdateMvByPartitionCommand command = Mockito.mock(UpdateMvByPartitionCommand.class);
+        try (MockedStatic<MTMVPlanUtil> mtmvPlanUtilStatic = Mockito.mockStatic(MTMVPlanUtil.class);
+                MockedStatic<UpdateMvByPartitionCommand> updateMvStatic
+                        = Mockito.mockStatic(UpdateMvByPartitionCommand.class)) {
+            mtmvPlanUtilStatic.when(() -> MTMVPlanUtil.createMTMVContext(Mockito.eq(mtmv), Mockito.anyList()))
+                    .thenReturn(mtmvCtx);
+            updateMvStatic.when(() -> UpdateMvByPartitionCommand.from(
+                    Mockito.eq(mtmv), Mockito.anySet(), Mockito.anyMap(), Mockito.any(StatementContext.class)))
+                    .thenReturn(command);
+            // Build nested mocks before starting the static stubbing chain.
+            StmtExecutor firstBatchExecutor = executorWithPlanSignature(firstBatchSignature);
+            StmtExecutor secondBatchExecutor = executorWithPlanSignature(secondBatchSignature);
+            mtmvPlanUtilStatic.when(() -> MTMVPlanUtil.executeCommand(
+                    Mockito.eq(mtmvCtx), Mockito.eq(command), Mockito.any(StatementContext.class),
+                    Mockito.anyString())).thenReturn(firstBatchExecutor, secondBatchExecutor);
+
+            Deencapsulation.invoke(task, "executePartitionBasedRefresh", refreshContext, RefreshMode.COMPLETE);
+        } finally {
+            ConnectContext.remove();
+        }
+    }
+
+    private StmtExecutor executorWithPlanSignature(IvmPlanSignature signature) {
+        IvmRewriteResult rewriteResult = new IvmRewriteResult();
+        rewriteResult.setPlanSignature(signature);
+        CascadesContext cascadesContext = Mockito.mock(CascadesContext.class);
+        Mockito.when(cascadesContext.getIvmRewriteResult()).thenReturn(Optional.of(rewriteResult));
+        NereidsPlanner planner = Mockito.mock(NereidsPlanner.class);
+        Mockito.when(planner.getCascadesContext()).thenReturn(cascadesContext);
+        StmtExecutor executor = Mockito.mock(StmtExecutor.class);
+        Mockito.when(executor.planner()).thenReturn(planner);
+        return executor;
     }
 
     private MTMVRefreshContext mockIvmIncrRefreshContext() throws AnalysisException {

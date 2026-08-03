@@ -36,6 +36,7 @@ import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.jmockit.Deencapsulation;
 import org.apache.doris.common.util.PropertyAnalyzer;
 import org.apache.doris.job.common.IntervalUnit;
+import org.apache.doris.job.common.TaskStatus;
 import org.apache.doris.job.extensions.mtmv.MTMVTask;
 import org.apache.doris.mtmv.MTMVRefreshEnum.BuildMode;
 import org.apache.doris.mtmv.MTMVRefreshEnum.MTMVRefreshState;
@@ -62,6 +63,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -136,6 +138,26 @@ public class MTMVTest {
         Assert.assertEquals(mvToBase.get("mvp1"), Sets.newHashSet("baseP1_1", "baseP1_2"));
         Assert.assertEquals(baseToMv.get("baseP1_1"), "mvp1");
         Assert.assertEquals(baseToMv.get("baseP1_2"), "mvp1");
+    }
+
+    @Test
+    public void testChangedBasePartitionsRequireCompleteSnapshotMapping() {
+        BaseTableInfo baseTableInfo = Mockito.mock(BaseTableInfo.class);
+        MTMVRefreshPartitionSnapshot firstSnapshot = new MTMVRefreshPartitionSnapshot();
+        firstSnapshot.getPctSnapshot(baseTableInfo).put("base_p1", new MTMVVersionSnapshot(1L, 11L));
+        MTMVRefreshPartitionSnapshot secondSnapshot = new MTMVRefreshPartitionSnapshot();
+        secondSnapshot.getPctSnapshot(baseTableInfo).put("base_p2", new MTMVVersionSnapshot(1L, 12L));
+        MTMVRefreshSnapshot refreshSnapshot = new MTMVRefreshSnapshot();
+        refreshSnapshot.updateSnapshots(
+                Map.of("mv_p1", firstSnapshot, "mv_p2", secondSnapshot), Set.of("mv_p1", "mv_p2"));
+
+        Optional<Set<String>> mappedPartitions = refreshSnapshot.getMvPartitionNames(
+                baseTableInfo, Map.of("base_p1", 11L, "base_p2", 12L));
+
+        Assert.assertTrue(mappedPartitions.isPresent());
+        Assert.assertEquals(Set.of("mv_p1", "mv_p2"), mappedPartitions.get());
+        Assert.assertFalse(refreshSnapshot.getMvPartitionNames(
+                baseTableInfo, Map.of("base_p1", 11L, "base_p3", 13L)).isPresent());
     }
 
     private Map<PartitionKeyDesc, Set<String>> mockRelatedPartitionDescs() throws AnalysisException {
@@ -287,6 +309,21 @@ public class MTMVTest {
     }
 
     @Test
+    public void testIncludingExcludedIvmBaseTableRequiresCompleteBaselineRebuild() {
+        MTMV mtmv = new MTMV();
+        mtmv.setMvProperties(new HashMap<>(
+                Map.of(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES, "t1,t2")));
+        BaseTableInfo includedBaseTable = new BaseTableInfo(new TableNameInfo("internal", "db1", "t2"));
+        mtmv.setRelation(new MTMVRelation(Set.of(includedBaseTable), Set.of(), Set.of(), Set.of(), Set.of()));
+        mtmv.getIvmInfo().setEnableIvm(true);
+
+        replayAlterMvProperties(mtmv,
+                Map.of(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES, "t1"));
+
+        Assert.assertTrue(mtmv.getIvmInfo().requiresCompleteBaselineRebuild());
+    }
+
+    @Test
     public void testAlterMvPropertiesWithOtherProperty() {
         Map<String, String> mvProperties = Maps.newHashMap();
         mvProperties.put(PropertyAnalyzer.PROPERTIES_EXCLUDED_TRIGGER_TABLES, "t1");
@@ -374,6 +411,44 @@ public class MTMVTest {
 
         Mockito.verify(editLog).submitEdit(
                 Mockito.eq(OperationType.OP_ALTER_MTMV), Mockito.any(AlterMTMV.class));
+        Mockito.verify(editLogItem).await();
+    }
+
+    @Test
+    public void testAddTaskResultSubmitsJournalWhileHoldingMvLock() {
+        MTMV mtmv = buildSerializableMTMV();
+        mtmv.getIvmInfo().setEnableIvm(true);
+        ReentrantReadWriteLock mvRwLock = Deencapsulation.getField(mtmv, "mvRwLock");
+        Env env = Mockito.mock(Env.class);
+        EditLog editLog = Mockito.mock(EditLog.class);
+        EditLogItem editLogItem = Mockito.mock(EditLogItem.class);
+        MTMVService mtmvService = Mockito.mock(MTMVService.class);
+        Mockito.when(env.getEditLog()).thenReturn(editLog);
+        Mockito.when(env.getMtmvService()).thenReturn(mtmvService);
+        Mockito.when(editLog.submitEdit(Mockito.eq(OperationType.OP_ALTER_MTMV), Mockito.any(AlterMTMV.class)))
+                .thenAnswer(invocation -> {
+                    Assert.assertTrue(mvRwLock.isWriteLockedByCurrentThread());
+                    return editLogItem;
+                });
+        Mockito.when(editLogItem.await()).thenAnswer(invocation -> {
+            Assert.assertFalse(mvRwLock.isWriteLockedByCurrentThread());
+            return 1L;
+        });
+        MTMVRelation relation = mtmv.getRelation();
+        MTMVTask task = new MTMVTask(mtmv, relation, null);
+        task.setStatus(TaskStatus.FAILED);
+        AlterMTMV alterMTMV = new AlterMTMV(new TableNameInfo("db1", "mv1"), MTMVAlterOpType.ADD_TASK);
+        alterMTMV.setTask(task);
+        alterMTMV.setRelation(relation);
+        alterMTMV.setPartitionSnapshots(Map.of());
+
+        try (MockedStatic<Env> mockedEnv = Mockito.mockStatic(Env.class)) {
+            mockedEnv.when(Env::getCurrentEnv).thenReturn(env);
+            Assert.assertTrue(mtmv.addTaskResult(alterMTMV, false));
+        }
+
+        Mockito.verify(editLog).submitEdit(
+                Mockito.eq(OperationType.OP_ALTER_MTMV), Mockito.same(alterMTMV));
         Mockito.verify(editLogItem).await();
     }
 

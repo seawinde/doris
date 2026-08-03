@@ -384,10 +384,12 @@ public class IvmBaselineRebuildTest extends TestWithFeService {
         AlterMTMV result = taskResult(mtmv, TaskStatus.FAILED, schemaChangeVersion);
         IvmInfo replayedInfo = mtmv.getIvmInfo();
         replayedInfo.requireCompleteBaselineRebuild();
+        replayedInfo.setPlanSignature("replayed_signature");
         result.setIvmInfo(replayedInfo);
 
         Assertions.assertTrue(mtmv.addTaskResult(result, true));
         Assertions.assertTrue(mtmv.getIvmInfo().isBaselineRebuildRequired());
+        Assertions.assertEquals("replayed_signature", mtmv.getIvmInfo().getPlanSignature());
         Assertions.assertEquals(schemaChangeVersion, mtmv.getSchemaChangeVersion());
 
         replayedInfo.clearBaselineRebuild();
