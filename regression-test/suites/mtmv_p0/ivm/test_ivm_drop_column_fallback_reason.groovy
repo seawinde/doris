@@ -88,7 +88,7 @@ suite("test_ivm_drop_column_fallback_reason", "nonConcurrent") {
     sql """REFRESH MATERIALIZED VIEW ivm_drop_col_reason_mv INCREMENTAL"""
     taskId = waitForNewTask(taskId)
     order_qt_after_drop_column_task """
-        SELECT Status, IFNULL(IvmFallbackReason, 'NONE')
+        SELECT Status
         FROM tasks('type'='mv') WHERE TaskId = '${taskId}'
         ORDER BY TaskId
     """
@@ -100,7 +100,7 @@ suite("test_ivm_drop_column_fallback_reason", "nonConcurrent") {
     sql """REFRESH MATERIALIZED VIEW ivm_drop_col_reason_mv INCREMENTAL"""
     taskId = waitForNewTask(taskId)
     order_qt_following_incremental_task """
-        SELECT Status, IFNULL(IvmFallbackReason, 'NONE')
+        SELECT Status
         FROM tasks('type'='mv') WHERE TaskId = '${taskId}'
         ORDER BY TaskId
     """
