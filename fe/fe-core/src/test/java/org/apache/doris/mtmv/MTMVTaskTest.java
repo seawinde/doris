@@ -180,6 +180,20 @@ public class MTMVTaskTest {
     }
 
     @Test
+    public void testPlanPartitionRefreshSelfManageWhenSync() throws Exception {
+        Mockito.when(mtmvPartitionInfo.getPartitionType()).thenReturn(MTMVPartitionType.SELF_MANAGE);
+        MTMVTask task = new MTMVTask(mtmv, relation,
+                MTMVTaskContext.of(MTMVTaskTriggerMode.MANUAL, null, RefreshMode.AUTO));
+        Object request = Deencapsulation.invoke(task, "resolveRefreshRequest");
+
+        Object plan = Deencapsulation.invoke(task, "planPartitionRefresh",
+                Mockito.mock(MTMVRefreshContext.class), request);
+
+        Assert.assertTrue(Deencapsulation.getField(plan, "canRefreshByPartitions"));
+        Assert.assertTrue(CollectionUtils.isEmpty(Deencapsulation.getField(plan, "partitions")));
+    }
+
+    @Test
     public void testCalculateNeedRefreshPartitionsSystemComplete() throws AnalysisException, JobException {
         MTMVTaskContext context = new MTMVTaskContext(MTMVTaskTriggerMode.SYSTEM);
         MTMVTask task = new MTMVTask(mtmv, relation, context);

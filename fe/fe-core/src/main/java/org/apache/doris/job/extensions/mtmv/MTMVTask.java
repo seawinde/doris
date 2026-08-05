@@ -485,13 +485,6 @@ public class MTMVTask extends AbstractTask {
         if (request.explicitPartitions) {
             return PartitionRefreshPlan.success(context, request.partitions);
         }
-        if (mtmv.getMvPartitionInfo().getPartitionType() == MTMVPartitionType.SELF_MANAGE) {
-            // Keep this inside the PARTITIONS attempt so PARTITIONS FALLBACK and
-            // AUTO can still continue to COMPLETE for non-partitioned MVs.
-            return PartitionRefreshPlan.fallback(
-                    "The partition method of this asynchronous materialized view "
-                            + "does not support refreshing by partition");
-        }
         boolean fresh;
         try {
             fresh = MTMVPartitionUtil.isMTMVSync(context, relation.getBaseTablesOneLevelAndFromView(),
@@ -501,6 +494,13 @@ public class MTMVTask extends AbstractTask {
         }
         if (fresh) {
             return PartitionRefreshPlan.success(context, Lists.newArrayList());
+        }
+        if (mtmv.getMvPartitionInfo().getPartitionType() == MTMVPartitionType.SELF_MANAGE) {
+            // Keep this inside the PARTITIONS attempt so PARTITIONS FALLBACK and
+            // AUTO can still continue to COMPLETE for non-partitioned MVs.
+            return PartitionRefreshPlan.fallback(
+                    "The partition method of this asynchronous materialized view "
+                            + "does not support refreshing by partition");
         }
         try {
             return PartitionRefreshPlan.success(context,
