@@ -701,7 +701,8 @@ public class MTMVTaskTest {
         Object request = Deencapsulation.invoke(task, "resolveRefreshRequest");
 
         JobException exception = Assert.assertThrows(JobException.class,
-                () -> Deencapsulation.invoke(task, "handlePendingIvmBaselineRebuild", refreshContext, request));
+                () -> Deencapsulation.invoke(task, "handlePendingIvmBaselineRebuild", refreshContext, request,
+                        new ConnectContext()));
 
         Assert.assertTrue(exception.getMessage().contains("run an AUTO or COMPLETE refresh first"));
         Assert.assertEquals(IvmFailureReason.BINLOG_BROKEN.name(),
@@ -722,7 +723,7 @@ public class MTMVTaskTest {
 
         JobException exception = Assert.assertThrows(JobException.class,
                 () -> Deencapsulation.invoke(task, "handlePendingIvmBaselineRebuild",
-                        Mockito.mock(MTMVRefreshContext.class), request));
+                        Mockito.mock(MTMVRefreshContext.class), request, new ConnectContext()));
 
         Assert.assertTrue(exception.getMessage().contains("run a PARTITIONS FALLBACK, AUTO, or COMPLETE refresh"));
     }
@@ -739,7 +740,7 @@ public class MTMVTaskTest {
         Object request = Deencapsulation.invoke(task, "resolveRefreshRequest");
 
         Assert.assertTrue(Deencapsulation.invoke(task, "handlePendingIvmBaselineRebuild",
-                Mockito.mock(MTMVRefreshContext.class), request));
+                Mockito.mock(MTMVRefreshContext.class), request, new ConnectContext()));
         Assert.assertEquals(MTMVTask.MTMVTaskRefreshMode.NOT_REFRESH,
                 Deencapsulation.getField(task, "refreshMode"));
         Assert.assertEquals(IvmFailureReason.BINLOG_BROKEN.name(),
