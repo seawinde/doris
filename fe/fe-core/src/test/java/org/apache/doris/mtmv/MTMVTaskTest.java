@@ -18,6 +18,7 @@
 package org.apache.doris.mtmv;
 
 import org.apache.doris.catalog.Column;
+import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.KeysType;
 import org.apache.doris.catalog.MTMV;
@@ -912,7 +913,7 @@ public class MTMVTaskTest {
         Mockito.when(mtmv.getName()).thenReturn("test_mv");
         Mockito.when(mtmv.getRefreshPartitionNum()).thenReturn(1);
         Mockito.when(mtmvPartitionInfo.getPctInfos()).thenReturn(Collections.emptyList());
-        DatabaseIf database = Mockito.mock(DatabaseIf.class);
+        Database database = Mockito.mock(Database.class);
         Mockito.when(database.getFullName()).thenReturn("test_db");
         Mockito.when(mtmv.getDatabase()).thenReturn(database);
 
@@ -936,13 +937,21 @@ public class MTMVTaskTest {
                     Mockito.eq(mtmv), Mockito.anySet(), Mockito.anyMap(), Mockito.any(StatementContext.class)))
                     .thenReturn(command);
             // Build nested mocks before starting the static stubbing chain.
-            StmtExecutor firstBatchExecutor = executorWithPlanSignature(firstBatchSignature);
-            StmtExecutor secondBatchExecutor = executorWithPlanSignature(secondBatchSignature);
+            List<StmtExecutor> batchExecutors = Lists.newArrayList(
+                    executorWithPlanSignature(firstBatchSignature),
+                    executorWithPlanSignature(secondBatchSignature));
+            AtomicInteger batchIndex = new AtomicInteger();
             mtmvPlanUtilStatic.when(() -> MTMVPlanUtil.executeCommand(
                     Mockito.eq(mtmvCtx), Mockito.eq(command), Mockito.any(StatementContext.class),
-                    Mockito.anyString())).thenReturn(firstBatchExecutor, secondBatchExecutor);
+                    Mockito.anyString(), Mockito.any(Consumer.class))).thenAnswer(invocation -> {
+                        Consumer<StmtExecutor> executorConsumer = invocation.getArgument(4);
+                        executorConsumer.accept(batchExecutors.get(batchIndex.getAndIncrement()));
+                        executorConsumer.accept(null);
+                        return null;
+                    });
 
-            Deencapsulation.invoke(task, "executePartitionBasedRefresh", refreshContext, RefreshMode.COMPLETE);
+            Deencapsulation.invoke(task, "executePartitionBasedRefresh",
+                    refreshContext, RefreshMode.COMPLETE, mtmvCtx);
         } finally {
             ConnectContext.remove();
         }
